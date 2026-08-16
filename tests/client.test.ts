@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import factory from '../src/client.js'
 
-/** 最小 react 桩：createElement 返回可断言的普通对象。 */
+/** 最小 react 桩：createElement + useState 返回可断言的普通对象。 */
 function fakeReact() {
   return {
     createElement: (type: unknown, props: unknown, ...children: unknown[]) => ({
       type, props, children,
     }),
+    useState: (initial: unknown) => [initial, () => {}],
   }
 }
 
@@ -14,11 +15,11 @@ interface FakeEntry {
   options: { id: string; order?: number; label?: string }
   component: (props: {
     sessionId: string
-    useSession: (selector: (snapshot: unknown) => unknown) => unknown
+    useProjection: (key: string) => unknown
   }) => unknown
 }
 
-function fakeCtx() {
+function fakeCtx(sessions?: unknown) {
   const registrations: { key: string; effect: FakeEntry }[] = []
   const slots = {
     inject: (key: string, callback: () => unknown) => {
@@ -30,19 +31,45 @@ function fakeCtx() {
   }
   return {
     registrations,
-    ctx: { get: (name: string) => (name === 'slots' ? slots : undefined) },
+    ctx: {
+      get: (name: string) => {
+        if (name === 'slots') return slots
+        if (name === 'sessions' && sessions !== undefined) return sessions
+        return undefined
+      },
+    },
   }
 }
 
-/** 构造一个带节点的假快照（结构与官方 ConversationSnapshot 字段子集一致）。 */
-function fakeSnapshot(sessionId: string, overrides: Record<string, unknown> = {}) {
+/** 投影值：与 host 投影单元 view 输出结构一致。 */
+function fakeProjection(overrides: Record<string, unknown> = {}) {
   return {
-    sessionId,
     nodes: [
-      { kind: 'user', seq: 1, content: [{ type: 'text', text: '帮我写个插件' }] },
-      { kind: 'assistant', seq: 2, turn: 1, blocks: [{ type: 'text', text: '好的' }] },
+      {
+        nodeKey: '1',
+        turn: 1,
+        parentKey: null,
+        startSeq: 1,
+        endSeq: 4,
+        boundarySeq: 4,
+        kind: 'mixed',
+        summary: '帮我写个插件',
+        text: '帮我写个插件\n好的，我来写',
+        messageSeqs: [2, 3],
+      },
+      {
+        nodeKey: '2',
+        turn: 2,
+        parentKey: '1',
+        startSeq: 5,
+        endSeq: 6,
+        boundarySeq: null,
+        kind: 'user',
+        summary: '第二个问题',
+        text: '第二个问题',
+        messageSeqs: [5],
+      },
     ],
-    turnEnds: new Map([[1, 3]]),
     ...overrides,
   }
 }
@@ -66,33 +93,41 @@ describe('client bundle factory', () => {
     expect(entry.options.label).toBe('历史索引')
   })
 
-  it('视图用快照数据渲染逻辑节点（含摘要与 sessionId）', () => {
+  it('视图用投影数据渲染节点（完整索引 + 摘要 + 可续写/进行中）', () => {
     const { registrations, ctx } = fakeCtx()
     const plugin = factory(() => fakeReact())
     plugin.apply(ctx as never)
-    const snapshot = fakeSnapshot('sess-1')
     const rendered = registrations[0].effect.component({
       sessionId: 'sess-1',
-      useSession: (selector) => selector(snapshot),
+      useProjection: (key) => (key === 'history' ? fakeProjection() : undefined),
     })
     const text = JSON.stringify(rendered)
     expect(text).toContain('History Index')
-    expect(text).toContain('M1 数据链路已接通（1 个逻辑节点）')
+    expect(text).toContain('2 个逻辑节点')
     expect(text).toContain('帮我写个插件')
-    expect(text).toContain('可 fork')
+    expect(text).toContain('可续写')
+    expect(text).toContain('进行中')
   })
 
-  it('空快照渲染空态提示', () => {
+  it('无投影值时渲染空态提示', () => {
     const { registrations, ctx } = fakeCtx()
     const plugin = factory(() => fakeReact())
     plugin.apply(ctx as never)
-    const snapshot = fakeSnapshot('sess-1', { nodes: [], turnEnds: new Map() })
     const rendered = registrations[0].effect.component({
       sessionId: 'sess-1',
-      useSession: (selector) => selector(snapshot),
+      useProjection: () => undefined,
     })
     const text = JSON.stringify(rendered)
     expect(text).toContain('暂无节点')
-    expect(text).toContain('0 个逻辑节点')
+  })
+
+  it('捕获 sessions 服务供 fork 使用', () => {
+    const sessions = {
+      fork: () => Promise.resolve('child-1'),
+      open: () => {},
+    }
+    const { ctx } = fakeCtx(sessions)
+    const plugin = factory(() => fakeReact())
+    expect(() => plugin.apply(ctx as never)).not.toThrow()
   })
 })

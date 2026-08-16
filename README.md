@@ -7,13 +7,12 @@ DeepSeek Harness（DSH）插件开发工程：Session Tree / History Index
 
 一个贴合 DSH 惯例的 Cordis 插件工程（M1：数据链路已接通）：
 
-- **Host 半区**（`src/index.ts`）：插件默认入口，演示配置注入、核心服务与可逆副作用；
+- **Host 半区**（`src/index.ts`）：注册 `history` 投影单元，把每个会话的
+  SessionEvent 折叠为节点树；
 - **Client 半区**（`src/client.ts`）：经 `exports["./client"]` 导出，注册
-  `conversation.view` 的「历史索引」tab；M1 数据走官方 client 投影
-  （ConversationSnapshot → `src/projection.ts` 派生逻辑节点），与
-  ui-conversation 的 StatsLine 同构，天然实时、零轮询；
-- **纯逻辑层**（`src/projection.ts` / `src/options.ts` / `src/lib.ts`）：
-  与平台无关、可直接单测；
+  `conversation.view` 的「历史索引」tab，经 `useProjection('history')`
+  读取完整索引；
+- **纯逻辑层**（`src/history/`）：事件折叠、摘要、类型（与平台无关、可直接单测）；
 - **挂载示例**（`cordis.yml`）：展示插件如何作为组合行进入 DSH 组合。
 
 ## 目录结构
@@ -28,18 +27,36 @@ DeepSeek Harness（DSH）插件开发工程：Session Tree / History Index
 │   ├── build-client.mjs  # esbuild 打包 client → 浏览器模块加载器 handoff
 │   └── smoke.sh          # 挂载验证（独立 trail-test profile 启动 DSH）
 ├── src/
-│   ├── index.ts          # Host 插件入口（name / Config / apply）
+│   ├── index.ts          # Host 插件入口：注册 history 投影单元
 │   ├── client.ts         # Client 插件入口（./client 子路径，factory(require)）
-│   ├── projection.ts     # 逻辑节点派生（纯函数：turn 分组 / 摘要 / fork 边界）
+│   ├── history/
+│   │   ├── types.ts      # 节点树共享类型（host 折叠 + client 渲染）
+│   │   ├── text.ts       # 摘要/文本提取工具（纯函数）
+│   │   ├── fold.ts       # 事件折叠：SessionEvent → 节点树（纯 reducer）
+│   │   └── schema.ts     # zod schema（host 侧，校验 view 输出）
 │   ├── options.ts        # 配置：类型 + schemastery Schema + normalizeOptions
 │   └── lib.ts            # 纯业务逻辑占位
 └── tests/
-    ├── projection.test.ts    # 逻辑节点派生单测
-    ├── client.test.ts        # client bundle factory + 视图渲染
+    ├── history-fold.test.ts    # 事件折叠单测（turn 分组/摘要/fork 边界）
+    ├── host-projection.test.ts # host 投影单元注册与折叠
+    ├── client.test.ts          # client bundle factory + 视图渲染
     ├── options.test.ts
     ├── lib.test.ts
-    └── plugin-shape.test.ts  # 插件形状 + cordis.yml 结构校验
+    └── plugin-shape.test.ts    # 插件形状 + cordis.yml 结构校验
 ```
+
+## 数据链路（M1，官方投影通道）
+
+```
+SessionEvent 日志（唯一事实来源，只读）
+  → host 投影单元 fold.ts 折叠为 per-session 节点树
+  → 官方投影缓存持久化（$DSH_HOME/storages/session_projcache.json）
+  → client useProjection('history') 读取完整索引（不受对话窗口限制，重启恢复）
+```
+
+节点：`nodeKey`（turn）/ `parentKey`（树边）/ `boundarySeq`（turn/end seq，安全
+fork 边界）/ kind / 摘要 / 内联文本（有界）。交互：点击节点内联展开查看，
+可续写节点提供「从这里续写」（`sessions.fork` + `sessions.open`）。
 
 ## 常用命令
 
