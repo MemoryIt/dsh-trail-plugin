@@ -1,14 +1,19 @@
 # dsh-trail
 
-DeepSeek Harness（DSH）插件开发工程（骨架阶段，功能待定）。
+DeepSeek Harness（DSH）插件开发工程：Session Tree / History Index
+（给线性 Session 加上可索引、可跳转、可分叉的导航层，见 `DESIGN.md`）。
 
 ## 这是什么
 
-一个贴合 DSH 惯例的 Cordis 插件工程骨架：
+一个贴合 DSH 惯例的 Cordis 插件工程（M1：数据链路已接通）：
 
 - **Host 半区**（`src/index.ts`）：插件默认入口，演示配置注入、核心服务与可逆副作用；
-- **Client 半区**（`src/client.ts`）：经 `exports["./client"]` 导出，演示「可选服务」读取模式；
-- **纯逻辑层**（`src/options.ts` / `src/lib.ts`）：与平台无关、可直接单测；
+- **Client 半区**（`src/client.ts`）：经 `exports["./client"]` 导出，注册
+  `conversation.view` 的「历史索引」tab；M1 数据走官方 client 投影
+  （ConversationSnapshot → `src/projection.ts` 派生逻辑节点），与
+  ui-conversation 的 StatsLine 同构，天然实时、零轮询；
+- **纯逻辑层**（`src/projection.ts` / `src/options.ts` / `src/lib.ts`）：
+  与平台无关、可直接单测；
 - **挂载示例**（`cordis.yml`）：展示插件如何作为组合行进入 DSH 组合。
 
 ## 目录结构
@@ -19,15 +24,21 @@ DeepSeek Harness（DSH）插件开发工程（骨架阶段，功能待定）。
 ├── package.json          # 包声明：exports["./client"]、dsh.client（platform: web）
 ├── tsconfig.json         # strict + NodeNext ESM
 ├── vitest.config.ts
+├── scripts/
+│   ├── build-client.mjs  # esbuild 打包 client → 浏览器模块加载器 handoff
+│   └── smoke.sh          # 挂载验证（独立 trail-test profile 启动 DSH）
 ├── src/
 │   ├── index.ts          # Host 插件入口（name / Config / apply）
-│   ├── client.ts         # Client 插件入口（./client 子路径）
+│   ├── client.ts         # Client 插件入口（./client 子路径，factory(require)）
+│   ├── projection.ts     # 逻辑节点派生（纯函数：turn 分组 / 摘要 / fork 边界）
 │   ├── options.ts        # 配置：类型 + schemastery Schema + normalizeOptions
 │   └── lib.ts            # 纯业务逻辑占位
 └── tests/
+    ├── projection.test.ts    # 逻辑节点派生单测
+    ├── client.test.ts        # client bundle factory + 视图渲染
     ├── options.test.ts
     ├── lib.test.ts
-    └── plugin-shape.test.ts   # 插件形状 + cordis.yml 结构校验
+    └── plugin-shape.test.ts  # 插件形状 + cordis.yml 结构校验
 ```
 
 ## 常用命令
@@ -36,7 +47,7 @@ DeepSeek Harness（DSH）插件开发工程（骨架阶段，功能待定）。
 pnpm install     # 安装依赖
 pnpm typecheck   # 类型检查
 pnpm test        # 跑单测
-pnpm build       # 构建到 lib/
+pnpm build       # tsc 构建 + esbuild 打 client bundle（lib/client.js）
 pnpm verify      # 类型检查 + 测试 + 构建 一条龙
 ```
 

@@ -12,7 +12,10 @@ function fakeReact() {
 
 interface FakeEntry {
   options: { id: string; order?: number; label?: string }
-  component: (props: { sessionId: string }) => unknown
+  component: (props: {
+    sessionId: string
+    useSession: (selector: (snapshot: unknown) => unknown) => unknown
+  }) => unknown
 }
 
 function fakeCtx() {
@@ -28,6 +31,19 @@ function fakeCtx() {
   return {
     registrations,
     ctx: { get: (name: string) => (name === 'slots' ? slots : undefined) },
+  }
+}
+
+/** 构造一个带节点的假快照（结构与官方 ConversationSnapshot 字段子集一致）。 */
+function fakeSnapshot(sessionId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    sessionId,
+    nodes: [
+      { kind: 'user', seq: 1, content: [{ type: 'text', text: '帮我写个插件' }] },
+      { kind: 'assistant', seq: 2, turn: 1, blocks: [{ type: 'text', text: '好的' }] },
+    ],
+    turnEnds: new Map([[1, 3]]),
+    ...overrides,
   }
 }
 
@@ -50,16 +66,33 @@ describe('client bundle factory', () => {
     expect(entry.options.label).toBe('历史索引')
   })
 
-  it('视图组件用默认内容渲染并展示当前 sessionId', () => {
+  it('视图用快照数据渲染逻辑节点（含摘要与 sessionId）', () => {
     const { registrations, ctx } = fakeCtx()
     const plugin = factory(() => fakeReact())
     plugin.apply(ctx as never)
-    const rendered = registrations[0].effect.component({ sessionId: 'sess-1' })
-    expect(rendered.type).toBe('div')
-    // 首行默认内容包含当前 Session id（纯字符串校验：序列化后代文本）
+    const snapshot = fakeSnapshot('sess-1')
+    const rendered = registrations[0].effect.component({
+      sessionId: 'sess-1',
+      useSession: (selector) => selector(snapshot),
+    })
     const text = JSON.stringify(rendered)
     expect(text).toContain('History Index')
-    expect(text).toContain('sess-1')
-    expect(text).toContain('hello world')
+    expect(text).toContain('M1 数据链路已接通（1 个逻辑节点）')
+    expect(text).toContain('帮我写个插件')
+    expect(text).toContain('可 fork')
+  })
+
+  it('空快照渲染空态提示', () => {
+    const { registrations, ctx } = fakeCtx()
+    const plugin = factory(() => fakeReact())
+    plugin.apply(ctx as never)
+    const snapshot = fakeSnapshot('sess-1', { nodes: [], turnEnds: new Map() })
+    const rendered = registrations[0].effect.component({
+      sessionId: 'sess-1',
+      useSession: (selector) => selector(snapshot),
+    })
+    const text = JSON.stringify(rendered)
+    expect(text).toContain('暂无节点')
+    expect(text).toContain('0 个逻辑节点')
   })
 })

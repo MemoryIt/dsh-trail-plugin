@@ -1,17 +1,19 @@
 /**
- * dsh-trail-plugin client 半区（History Index 左栏原型的 hello world 版本）。
+ * dsh-trail-plugin client 半区（History Index）。
  *
  * 打包约定：本文件被 tsc 编译为 `export default function factory(require) {...}`，
  * `scripts/build-client.mjs` 再把它包装成 DSH 浏览器模块加载器 handoff
- * （`window.__ModuleLoader__.load({ id, factory })`），覆盖写回 lib/client.js
- * （即 package.json `exports["./client"]` 指向、web 端 /plugins/<id>/client.js
- * 提供的文件）。
+ * （`window.__ModuleLoader__.load({ id, factory })`），覆盖写回 lib/client.js。
  *
- * factory 内的 `require` 是加载器绑定的同步模块表查询：只允许解析平台模块
- * （react / @deepseek-ai/cordis / @deepseek-ai/dsh-client-ui-slots ...），
- * 其余依赖必须内联。本插件运行时只需要 react。
+ * M1 数据链路（官方 client 投影路径，无 host RPC）：
+ *   官方 ConversationSnapshot（runtime 已从 SessionEvent 组装，天然实时）
+ *     → 适配层 mapSnapshot（src/projection.ts 的 ProjectionInput）
+ *     → deriveNodes 派生逻辑节点
+ *     → 视图渲染
+ * 与 ui-conversation 的 StatsLine / ui-deliverables 同构。
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { deriveNodes, type HistoryNode, type ProjectionInput, type SurfaceNodeLike } from './projection.js'
 
 /** 模块表 require 签名（同步）。 */
 type BundleRequire = (spec: string) => unknown
@@ -31,54 +33,99 @@ interface PluginEntry {
 /** 与 src/index.ts 的 host 插件同名，运行时按入口（./client）区分。 */
 const PLUGIN_NAME = 'dsh-trail-plugin'
 
-/** 视图条目 id（出现在会话头部 tab 环里，M1 起逐步替换为真实节点）。 */
+/** 视图条目 id（出现在会话头部 tab 环里）。 */
 const VIEW_ID = 'history'
 
-/** 占位节点行（M1 前使用默认内容填充）。 */
-const PLACEHOLDER_ROWS = [
-  { icon: '●', text: '' }, // 首行由组件注入当前 Session id
-  { icon: '○', text: '节点 1 —— M1 接入真实节点列表' },
-  { icon: '○', text: '节点 2 —— 支持跳转查看 / fork 续写' },
-  { icon: '○', text: '节点 3 —— 多叶子角标与级联浏览' },
-]
+/** conversation.view 标准 props 的最小结构（官方类型来自 @deepseek-ai/dsh-client-runtime/client）。 */
+interface HistoryViewProps {
+  sessionId: string
+  useSession: (selector: (snapshot: unknown) => unknown) => unknown
+}
 
-/**
- * 视图组件工厂：History Index 占位页（GUI hello world）。
- * 使用官方主题 token（--dsw-alias-*）与标准 slot props（sessionId）。
- * @param React - 平台模块 react 的命名空间。
- */
+/** 快照节点的最小结构（官方类型 ConversationNode 的字段子集）。 */
+interface SnapshotNodeLike {
+  kind?: string
+  seq?: number
+  turn?: number
+  content?: unknown
+  blocks?: unknown
+}
+
+/** 提取节点纯文本：user/steering 走 content，assistant 走 blocks。 */
+function nodeText(node: SnapshotNodeLike): string {
+  const blocks = Array.isArray(node.content)
+    ? (node.content as unknown[])
+    : Array.isArray(node.blocks)
+      ? (node.blocks as unknown[])
+      : []
+  const parts: string[] = []
+  for (const block of blocks) {
+    const text = (block as Record<string, unknown> | null)?.text
+    if (typeof text === 'string' && text !== '') parts.push(text)
+  }
+  return parts.join('\n')
+}
+
+/** 适配层：官方 ConversationSnapshot → 投影输入。 */
+function mapSnapshot(snapshot: unknown): ProjectionInput {
+  const value = (snapshot ?? {}) as Record<string, unknown>
+  const nodes = Array.isArray(value.nodes) ? (value.nodes as SnapshotNodeLike[]) : []
+  const turnEnds = value.turnEnds instanceof Map ? value.turnEnds : new Map<number, number>()
+  return {
+    sessionId: typeof value.sessionId === 'string' ? value.sessionId : '',
+    nodes: nodes.map((node): SurfaceNodeLike => ({
+      kind: typeof node.kind === 'string' ? node.kind : 'other',
+      seq: typeof node.seq === 'number' ? node.seq : 0,
+      turn: typeof node.turn === 'number' ? node.turn : undefined,
+      text: nodeText(node),
+    })),
+    turnEnds,
+  }
+}
+
+const KIND_ICONS: Record<string, string> = {
+  user: '👤',
+  assistant: '🤖',
+  mixed: '🔀',
+  tool: '🔧',
+  other: '·',
+}
+
+/** 视图组件工厂：History Index 占位页（M1 真实节点数据）。 */
 function createHistoryView(React: typeof import('react')) {
-  return function HistoryView(props: { sessionId: string }): ReturnType<typeof React.createElement> {
-    const rows = [
-      { icon: '●', text: `当前 Session：${props.sessionId}` },
-      ...PLACEHOLDER_ROWS.slice(1),
-    ]
+  return function HistoryView(props: HistoryViewProps): ReturnType<typeof React.createElement> {
+    const snapshot = props.useSession((s: unknown) => s)
+    const nodes: HistoryNode[] = deriveNodes(mapSnapshot(snapshot))
+
+    const panelStyle: React.CSSProperties = {
+      maxWidth: '480px',
+      padding: '16px',
+      borderRadius: '10px',
+      background: 'var(--dsw-alias-bg-layer-1)',
+      border: '1px solid var(--dsw-alias-border-l1)',
+    }
     const itemStyle: React.CSSProperties = {
       display: 'flex',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       gap: '8px',
       padding: '8px 12px',
       marginBottom: '6px',
       borderRadius: '6px',
       background: 'var(--dsw-alias-bg-base)',
       border: '1px solid var(--dsw-alias-border-l1)',
-      color: 'var(--dsw-alias-label-primary)',
-      fontSize: '13px',
     }
+    const metaStyle: React.CSSProperties = {
+      marginTop: '2px',
+      fontSize: '11px',
+      color: 'var(--dsw-alias-label-secondary)',
+    }
+
     return React.createElement(
       'div',
       { style: { padding: '16px' } },
       React.createElement(
         'div',
-        {
-          style: {
-            maxWidth: '420px',
-            padding: '16px',
-            borderRadius: '10px',
-            background: 'var(--dsw-alias-bg-layer-1)',
-            border: '1px solid var(--dsw-alias-border-l1)',
-          },
-        },
+        { style: panelStyle },
         React.createElement(
           'h2',
           { style: { margin: '0 0 4px', fontSize: '15px', color: 'var(--dsw-alias-label-primary)' } },
@@ -87,18 +134,46 @@ function createHistoryView(React: typeof import('react')) {
         React.createElement(
           'p',
           { style: { margin: '0 0 14px', fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
-          'hello world —— 左栏原型占位（M1 接入真实节点）',
+          `M1 数据链路已接通（${nodes.length} 个逻辑节点）`,
         ),
-        rows.map((row, index) => React.createElement(
-          'div',
-          { key: index, style: itemStyle },
-          React.createElement(
-            'span',
-            { style: { color: 'var(--dsw-alias-brand-primary)' } },
-            row.icon,
-          ),
-          React.createElement('span', null, row.text),
-        )),
+        nodes.length === 0
+          ? React.createElement(
+            'p',
+            { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
+            '暂无节点，等待第一条消息',
+          )
+          : nodes.map((node) => React.createElement(
+            'div',
+            { key: node.nodeKey, style: itemStyle },
+            React.createElement(
+              'span',
+              { style: { color: 'var(--dsw-alias-brand-primary)', fontSize: '13px' } },
+              KIND_ICONS[node.kind] ?? KIND_ICONS.other,
+            ),
+            React.createElement(
+              'div',
+              { style: { minWidth: 0 } },
+              React.createElement(
+                'div',
+                {
+                  style: {
+                    fontSize: '13px',
+                    color: 'var(--dsw-alias-label-primary)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  },
+                },
+                node.summary,
+              ),
+              React.createElement(
+                'div',
+                { style: metaStyle },
+                `#${node.index} · turn ${node.turn} · seq ${node.startSeq}–${node.endSeq}`
+                + (node.boundarySeq === null ? ' · 进行中' : ' · 可 fork'),
+              ),
+            ),
+          )),
       ),
     )
   }
@@ -106,8 +181,7 @@ function createHistoryView(React: typeof import('react')) {
 
 /**
  * 浏览器 bundle factory：返回 cordis 插件入口。
- * 在 apply 里把 `history` 视图注册进官方 `conversation.view` 视图环
- * （与 chat / trajectory 平级的新 tab，官方推荐的可添加席位）。
+ * 在 apply 里把 `history` 视图注册进官方 `conversation.view` 视图环。
  */
 export default function factory(require: BundleRequire): PluginEntry {
   const React = require('react') as typeof import('react')
