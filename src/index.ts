@@ -27,7 +27,7 @@ export function apply(ctx: Context, config: Partial<Options> = {}): void {
   }
 
   ctx.effect(() => {
-    logger.info(`[${options.label}] host plugin started`)
+    logger.info(`[${options.label}] hello world from dsh-trail-plugin (host)`)
     return () => {
       logger.info(`[${options.label}] host plugin stopped`)
     }
