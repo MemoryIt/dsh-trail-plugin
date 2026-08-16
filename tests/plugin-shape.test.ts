@@ -13,10 +13,12 @@ describe('plugin entrypoints', () => {
     expect(hostPlugin.Config).toBeDefined()
   })
 
-  it('client 入口导出 cordis 插件形状（name + apply）', () => {
-    expect(typeof clientPlugin.name).toBe('string')
-    expect(clientPlugin.name.length).toBeGreaterThan(0)
-    expect(typeof clientPlugin.apply).toBe('function')
+  it('client 入口导出浏览器 bundle factory（调用后返回 name + apply）', () => {
+    expect(typeof clientPlugin.default).toBe('function')
+    const entry = clientPlugin.default(() => ({}))
+    expect(typeof entry.name).toBe('string')
+    expect(entry.name.length).toBeGreaterThan(0)
+    expect(typeof entry.apply).toBe('function')
   })
 })
 
