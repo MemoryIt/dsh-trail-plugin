@@ -127,7 +127,7 @@ describe('client bundle factory', () => {
 
   it('左栏渲染当前会话的节点列表（root scope useSessions）', () => {
     const { registrations, ctx } = fakeCtx()
-    const plugin = factory(() => fakeReact([false])) // collapsed = false
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }])) // collapsed = false
     plugin.apply(ctx as never)
     const overlay = registrations.find(r => r.key === 'shell.overlay')
     const rendered = overlay?.effect.component({
@@ -153,7 +153,7 @@ describe('client bundle factory', () => {
 
   it('左栏在无当前会话或空会话时隐藏', () => {
     const { registrations, ctx } = fakeCtx()
-    const plugin = factory(() => fakeReact([false]))
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }]))
     plugin.apply(ctx as never)
     const overlay = registrations.find(r => r.key === 'shell.overlay')
     // 无 current → visible=false → 渲染 null

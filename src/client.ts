@@ -20,6 +20,11 @@ import { buildHistoryIndex, lineageForNode } from './history/index.js'
 import { type LineageSessionLike } from './history/lineage.js'
 import { kindLabel } from './history/text.js'
 import type { HistoryIndexState, HistoryNodeEntry } from './history/types.js'
+import {
+  LEFT_COLUMN_DEFAULT_WIDTH, LEFT_COLUMN_MAX_WIDTH, LEFT_COLUMN_MIN_WIDTH, LEFT_COLUMN_RAIL_WIDTH,
+  clampColumnWidth, readLeftColumnPrefs, writeLeftColumnPrefs,
+  type LeftColumnPrefs,
+} from './left-column.js'
 
 /** 模块表 require 签名（同步）。 */
 type BundleRequire = (spec: string) => unknown
@@ -333,10 +338,6 @@ function createHistoryView(
 
 /** 左栏面板条目 id（shell.overlay list 槽）。 */
 const LEFT_COLUMN_ID = 'dsh-trail-left-column'
-/** 左栏展开宽度（Spike 固定值；拖宽 + 记忆留给后续迭代）。 */
-const LEFT_COLUMN_WIDTH = 280
-/** 折叠后保留的竖向入口条宽度。 */
-const LEFT_COLUMN_RAIL_WIDTH = 28
 
 /** 左栏组件 props：root scope 标准 kit 的 useSessions（无需 session 作用域）。 */
 interface LeftColumnProps {
@@ -344,7 +345,7 @@ interface LeftColumnProps {
 }
 
 /**
- * 真左栏（Spike）：shell.overlay 浮动列 + 会话列内容让位。
+ * 真左栏：shell.overlay 浮动列 + 会话列内容让位 + 拖拽调宽/记忆。
  *
  * 挂载点：`shell.overlay`（list 槽，replaceRisk none，AppFrame 的
  * `[data-shell-overlay]` 浮层内，`position:absolute; inset:0` 覆盖整个三栏
@@ -355,6 +356,13 @@ interface LeftColumnProps {
  *   的盒），高度随会话列；ResizeObserver 跟随侧栏拖宽/折叠、窗口变化；
  * - 内容让位：把会话列根元素的 padding-left 设为列宽，聊天流/header/composer
  *   整体右移，面板占据左侧条带；卸载/隐藏/折叠时移除 padding 恢复全宽。
+ *
+ * 拖宽（参考 AppFrame DragHandle：pointer capture；宽度直写 DOM 不走 state）：
+ * - 面板右缘 8px 手柄；拖拽中实时写 panel.style.width 与 convRoot paddingLeft
+ *   （列表不重渲染），松手一次性 commit 到 localStorage（全局记忆：宽 + 折叠态）；
+ * - ResizeObserver 观测 border-box（改 padding 不触发）+ draggingRef 守卫
+ *   （拖拽中只跟随 left/top/height），避免回调覆盖拖拽直写；
+ * - 钳制 [240, min(480, 可用宽 - 480)]（聊天区至少保 480）；双击手柄复位 280。
  *
  * 数据：root scope 标准 kit 的 useSessions —— 当前会话（s.current）+ 会话行
  * 的 projectionValues.history（与 tab 同一条数据通路，重启恢复）。
@@ -372,8 +380,25 @@ function createLeftColumn(React: typeof import('react')) {
     const nodes = (summary?.projectionValues?.history as HistoryIndexState | undefined)?.nodes ?? []
     const visible = current !== undefined && summary !== undefined && summary.blank !== true
 
-    const [collapsed, setCollapsed] = React.useState(false)
+    // 偏好（宽度 + 折叠态）全局记忆。宽度在拖拽中走 ref（直写 DOM），松手后提交。
+    const [prefs, setPrefs] = React.useState<LeftColumnPrefs>(() => readLeftColumnPrefs())
+    const { collapsed } = prefs
+    const widthRef = React.useRef(prefs.width)
+    const draggingRef = React.useRef(false)
+    const dragStartRef = React.useRef({ x: 0, width: 0, available: 0 })
     const panelRef = React.useRef<HTMLDivElement | null>(null)
+    const convRootRef = React.useRef<HTMLElement | null>(null)
+    const [handleHovered, setHandleHovered] = React.useState(false)
+    // 拖拽中状态（仅起止各一次 setState；拖动中宽度直写 DOM 不触发重渲染）。
+    const [dragging, setDragging] = React.useState(false)
+
+    const commitPrefs = (next: LeftColumnPrefs): void => {
+      setPrefs(next)
+      writeLeftColumnPrefs(next)
+    }
+    const toggleCollapsed = (): void => {
+      commitPrefs({ width: widthRef.current, collapsed: !collapsed })
+    }
 
     // 几何 + 让位（layout effect：首帧前定位，避免面板闪现到 (0,0)）。
     // 副作用全部可逆：卸载/隐藏时移除会话列 padding，恢复官方布局。
@@ -385,28 +410,88 @@ function createLeftColumn(React: typeof import('react')) {
       const frame = overlayLayer?.parentElement ?? null
       const convRoot = document.querySelector<HTMLElement>('[data-slot="conversation"] > div[data-phase]')
       if (frame === null || convRoot === null) return
+      convRootRef.current = convRoot
       const applyLayout = (): void => {
         const frameRect = frame.getBoundingClientRect()
         const convRect = convRoot.getBoundingClientRect()
         panel.style.left = `${convRect.left - frameRect.left}px`
         panel.style.top = `${convRect.top - frameRect.top}px`
         panel.style.height = `${convRect.height}px`
-        panel.style.width = `${collapsed ? LEFT_COLUMN_RAIL_WIDTH : LEFT_COLUMN_WIDTH}px`
-        convRoot.style.paddingLeft = collapsed ? '' : `${LEFT_COLUMN_WIDTH}px`
+        // 拖拽中宽度由拖拽循环直写；这里只跟随几何。
+        if (!draggingRef.current) {
+          // 展开宽度按可用空间钳制（保存的宽度可能已超出窗口），折叠时记 rail 宽。
+          const expanded = collapsed
+            ? LEFT_COLUMN_RAIL_WIDTH
+            : clampColumnWidth(widthRef.current, convRect.width)
+          if (!collapsed) widthRef.current = expanded
+          panel.style.width = `${expanded}px`
+          convRoot.style.paddingLeft = collapsed ? '' : `${expanded}px`
+        }
       }
       applyLayout()
       const observer = typeof ResizeObserver === 'undefined'
         ? null
         : new ResizeObserver(applyLayout)
-      observer?.observe(convRoot)
+      // border-box：改 padding 不触发回调，避免与拖拽直写打架。
+      observer?.observe(convRoot, { box: 'border-box' })
       observer?.observe(frame)
       window.addEventListener('resize', applyLayout)
       return () => {
         observer?.disconnect()
         window.removeEventListener('resize', applyLayout)
+        convRootRef.current = null
         convRoot.style.removeProperty('padding-left')
       }
     }, [visible, collapsed])
+
+    // 拖宽：指针捕获后，pointermove 直写面板宽 + 会话列 paddingLeft。
+    const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+      e.preventDefault()
+      e.currentTarget.setPointerCapture(e.pointerId)
+      draggingRef.current = true
+      setDragging(true)
+      const convRoot = convRootRef.current
+      dragStartRef.current = {
+        x: e.clientX,
+        width: widthRef.current,
+        available: convRoot === null ? widthRef.current : convRoot.getBoundingClientRect().width,
+      }
+    }
+    const onHandlePointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
+      if (!draggingRef.current) return
+      const panel = panelRef.current
+      const convRoot = convRootRef.current
+      if (panel === null || convRoot === null) return
+      const { x, width, available } = dragStartRef.current
+      const next = clampColumnWidth(width + e.clientX - x, available)
+      widthRef.current = next
+      panel.style.width = `${next}px`
+      convRoot.style.paddingLeft = `${next}px`
+    }
+    const onHandlePointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
+      if (!draggingRef.current) return
+      draggingRef.current = false
+      setDragging(false)
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
+      commitPrefs({ width: widthRef.current, collapsed })
+    }
+    // 兜底：指针在窗口外释放/捕获被取消时同样提交。
+    const onHandleLostCapture = (): void => {
+      if (!draggingRef.current) return
+      draggingRef.current = false
+      setDragging(false)
+      commitPrefs({ width: widthRef.current, collapsed })
+    }
+    const onHandleDoubleClick = (): void => {
+      const panel = panelRef.current
+      const convRoot = convRootRef.current
+      widthRef.current = LEFT_COLUMN_DEFAULT_WIDTH
+      if (panel !== null) panel.style.width = `${LEFT_COLUMN_DEFAULT_WIDTH}px`
+      if (convRoot !== null) convRoot.style.paddingLeft = `${LEFT_COLUMN_DEFAULT_WIDTH}px`
+      commitPrefs({ width: LEFT_COLUMN_DEFAULT_WIDTH, collapsed })
+    }
 
     if (!visible) return null
 
@@ -433,6 +518,29 @@ function createLeftColumn(React: typeof import('react')) {
       color: 'var(--dsw-alias-label-secondary)',
       fontSize: '16px',
       cursor: 'pointer',
+    }
+    // 拖宽手柄：面板右缘 8px 命中条（仿 AppFrame 手柄；展开态渲染）。
+    const handleStyle: React.CSSProperties = {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      right: 0,
+      width: 8,
+      cursor: 'col-resize',
+      touchAction: 'none',
+      zIndex: 2,
+    }
+    const handlePillStyle: React.CSSProperties = {
+      position: 'absolute',
+      top: '50%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+      width: 3,
+      height: 32,
+      borderRadius: 2,
+      background: 'var(--dsw-alias-border-l3)',
+      opacity: handleHovered || dragging ? 1 : 0,
+      transition: 'opacity 120ms ease',
     }
     const headerStyle: React.CSSProperties = {
       display: 'flex',
@@ -495,7 +603,9 @@ function createLeftColumn(React: typeof import('react')) {
       'div',
       {
         ref: panelRef,
-        style: { ...panelStyle, width: collapsed ? LEFT_COLUMN_RAIL_WIDTH : LEFT_COLUMN_WIDTH },
+        // 渲染宽度读 ref：拖拽中的直写值在任意重渲染（会话更新等）下保持，
+        // 不会被未提交的 prefs 拉回。
+        style: { ...panelStyle, width: collapsed ? LEFT_COLUMN_RAIL_WIDTH : widthRef.current },
       },
       collapsed
         ? React.createElement(
@@ -504,7 +614,7 @@ function createLeftColumn(React: typeof import('react')) {
             type: 'button',
             style: railButtonStyle,
             title: '展开历史索引',
-            onClick: () => setCollapsed(false),
+            onClick: toggleCollapsed,
           },
           '»',
         )
@@ -522,7 +632,7 @@ function createLeftColumn(React: typeof import('react')) {
                 type: 'button',
                 style: toggleButtonStyle,
                 title: '折叠左栏',
-                onClick: () => setCollapsed(true),
+                onClick: toggleCollapsed,
               },
               '«',
             ),
@@ -560,6 +670,22 @@ function createLeftColumn(React: typeof import('react')) {
                   ),
                 ),
               )),
+          ),
+          // 拖宽手柄：指针捕获 + 直写宽度；双击复位默认宽。
+          React.createElement(
+            'div',
+            {
+              style: handleStyle,
+              title: '拖拽调整宽度（双击复位 280px）',
+              onPointerDown: onHandlePointerDown,
+              onPointerMove: onHandlePointerMove,
+              onPointerUp: onHandlePointerUp,
+              onLostPointerCapture: onHandleLostCapture,
+              onDoubleClick: onHandleDoubleClick,
+              onPointerEnter: () => setHandleHovered(true),
+              onPointerLeave: () => setHandleHovered(false),
+            },
+            React.createElement('div', { style: handlePillStyle }),
           ),
         ),
     )
