@@ -424,6 +424,8 @@ function createLeftColumn(
     const panelRef = React.useRef<HTMLDivElement | null>(null)
     const convRootRef = React.useRef<HTMLElement | null>(null)
     const [handleHovered, setHandleHovered] = React.useState(false)
+    // 折叠竖条悬停态（可发现性：竖条本身太窄，hover 高亮提示可展开）。
+    const [railHovered, setRailHovered] = React.useState(false)
     // 拖拽中状态（仅起止各一次 setState；拖动中宽度直写 DOM 不触发重渲染）。
     const [dragging, setDragging] = React.useState(false)
     // 瞬态提示（跳转失败原因），1.6s 后自动消失。
@@ -636,17 +638,31 @@ function createLeftColumn(
       borderRight: '1px solid var(--dsw-alias-border-l1)',
       boxSizing: 'border-box',
     }
+    // 折叠竖条：窄条 + 图标 + 竖排"历史"文字 + 悬停高亮，避免被误认为 UI 残留。
     const railButtonStyle: React.CSSProperties = {
       width: '100%',
       height: '100%',
       display: 'flex',
+      flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
+      gap: '6px',
       border: 'none',
-      background: 'transparent',
+      background: railHovered ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent',
       color: 'var(--dsw-alias-label-secondary)',
-      fontSize: '16px',
       cursor: 'pointer',
+      transition: 'background 120ms ease',
+    }
+    const railIconStyle: React.CSSProperties = {
+      fontSize: '16px',
+      lineHeight: 1,
+      color: 'var(--dsw-alias-brand-primary)',
+    }
+    const railTextStyle: React.CSSProperties = {
+      fontSize: '10px',
+      writingMode: 'vertical-rl',
+      letterSpacing: '2px',
+      userSelect: 'none',
     }
     // 拖宽手柄：面板右缘 8px 命中条（仿 AppFrame 手柄；展开态渲染）。
     const handleStyle: React.CSSProperties = {
@@ -752,8 +768,11 @@ function createLeftColumn(
             style: railButtonStyle,
             title: '展开历史索引',
             onClick: toggleCollapsed,
+            onPointerEnter: () => setRailHovered(true),
+            onPointerLeave: () => setRailHovered(false),
           },
-          '»',
+          React.createElement('span', { style: railIconStyle }, '☰'),
+          React.createElement('span', { style: railTextStyle }, '历史'),
         )
         : React.createElement(
           React.Fragment,

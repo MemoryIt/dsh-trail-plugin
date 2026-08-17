@@ -177,6 +177,24 @@ describe('client bundle factory', () => {
     expect(typeof rowProps?.onClick).toBe('function')
   })
 
+  it('折叠态渲染可识别的展开竖条（图标 + 竖排文字）', () => {
+    const { registrations, ctx } = fakeCtx()
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: true }]))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector({
+        ids: ['s-root'],
+        byId: { 's-root': { id: 's-root', displayTitle: '根会话', blank: false } },
+        current: 's-root',
+      }),
+    })
+    const text = JSON.stringify(rendered)
+    expect(text).toContain('展开历史索引')
+    expect(text).toContain('历史')
+    expect(text).toContain('☰')
+  })
+
   it('左栏在无当前会话或空会话时隐藏', () => {
     const { registrations, ctx } = fakeCtx()
     const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }]))
