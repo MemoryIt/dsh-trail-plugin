@@ -790,12 +790,26 @@ function createLeftColumn(
       opacity: handleHovered || dragging ? 1 : 0,
       transition: 'opacity 120ms ease',
     }
+    // 标题区复刻官方会话 header 两段式（ConversationRoot.module.css）：
+    // titleRow(min-height 32) + tabs 行(margin-top 4 + 27)。当前会话 view 环
+    // 有 chat/trajectory/history 3 项 → 官方 header 显示 tabs 行，分隔线在
+    // 12 + 32 + 4 + 27 = 75px 处。左栏无 tabs，把节点计数放到 tabs 行位置
+    // （样式对齐官方 .tab），让标题/内容分隔线与右侧对话区同水平线。
+    // box-sizing: border-box 保证 minHeight 含 padding（content-box 下会
+    // 多出 padding-top 12px——此前偏高 13px 的根因）。
     const headerStyle: React.CSSProperties = {
+      display: 'flex',
+      flexDirection: 'column',
+      boxSizing: 'border-box',
+      padding: '12px 12px 0',
+      minHeight: 75,
+      borderBottom: '1px solid var(--dsw-alias-border-l2)',
+    }
+    const titleRowStyle: React.CSSProperties = {
       display: 'flex',
       alignItems: 'center',
       gap: '8px',
-      padding: '10px 12px 8px',
-      borderBottom: '1px solid var(--dsw-alias-border-l1)',
+      minHeight: 32,
     }
     const titleStyle: React.CSSProperties = {
       margin: 0,
@@ -806,10 +820,16 @@ function createLeftColumn(
       color: 'var(--dsw-alias-label-primary)',
       whiteSpace: 'nowrap',
     }
+    // 节点计数占据官方 tabs 行位置（对齐 .tab 文本：13px/16 + label-tertiary）。
+    const countRowStyle: React.CSSProperties = {
+      marginTop: 4,
+      paddingLeft: 8,
+    }
     const countStyle: React.CSSProperties = {
-      flex: 'none',
-      fontSize: '11px',
-      color: 'var(--dsw-alias-label-secondary)',
+      fontSize: '13px',
+      lineHeight: '16px',
+      fontWeight: 500,
+      color: 'var(--dsw-alias-label-tertiary)',
     }
     const toggleButtonStyle: React.CSSProperties = {
       flex: 'none',
@@ -962,17 +982,25 @@ function createLeftColumn(
           React.createElement(
             'div',
             { style: headerStyle },
-            React.createElement('h2', { style: titleStyle }, 'History Index'),
-            React.createElement('span', { style: countStyle }, `${nodes.length} 个逻辑节点`),
             React.createElement(
-              'button',
-              {
-                type: 'button',
-                style: toggleButtonStyle,
-                title: '折叠左栏',
-                onClick: toggleCollapsed,
-              },
-              '«',
+              'div',
+              { style: titleRowStyle },
+              React.createElement('h2', { style: titleStyle }, 'History Index'),
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  style: toggleButtonStyle,
+                  title: '折叠左栏',
+                  onClick: toggleCollapsed,
+                },
+                '«',
+              ),
+            ),
+            React.createElement(
+              'div',
+              { style: countRowStyle },
+              React.createElement('span', { style: countStyle }, `${nodes.length} 个逻辑节点`),
             ),
           ),
           hint !== null
