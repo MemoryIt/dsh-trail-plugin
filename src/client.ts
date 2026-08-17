@@ -413,11 +413,20 @@ function createLeftColumn(
       return state === undefined || state.current === undefined ? undefined : state.byId[state.current]
     }) as SessionSummaryLike | undefined
     const nodes = (summary?.projectionValues?.history as HistoryIndexState | undefined)?.nodes ?? []
+    // 全量会话列表 → 节点中心索引（谱系角标：共享该逻辑节点的其他会话，
+    // 纯 client 派生，与 tab 同一条数据通路；root scope useSessions 自带全量列表）。
+    const sessionListState = props.useSessions((s: unknown) => s) as SessionListStateLike | undefined
+    const sessionsList = toLineageSessions(sessionListState)
+    const historyIndex = buildHistoryIndex(sessionsList)
     const visible = current !== undefined && summary !== undefined && summary.blank !== true
 
     // 偏好（宽度 + 折叠态）全局记忆。宽度在拖拽中走 ref（直写 DOM），松手后提交。
     const [prefs, setPrefs] = React.useState<LeftColumnPrefs>(() => readLeftColumnPrefs())
     const { collapsed } = prefs
+    // 角标下拉展开态（按 nodeKey；点击行尾「分叉 N」胶囊切换）。
+    const [lineageOpen, setLineageOpen] = React.useState<Record<string, boolean>>({})
+    // 行 hover 态（行尾「续写」按钮 hover 显现）。
+    const [hoveredRow, setHoveredRow] = React.useState<string | null>(null)
     const widthRef = React.useRef(prefs.width)
     const draggingRef = React.useRef(false)
     const dragStartRef = React.useRef({ x: 0, width: 0, available: 0 })
@@ -444,6 +453,18 @@ function createLeftColumn(
     }
     const toggleCollapsed = (): void => {
       commitPrefs({ width: widthRef.current, collapsed: !collapsed })
+    }
+
+    const toggleLineage = (nodeKey: string): void => {
+      setLineageOpen((prev) => ({ ...prev, [nodeKey]: !prev[nodeKey] }))
+    }
+    // 行尾「续写」：官方 fork 到该节点边界 → 打开子会话。左栏随 current
+    // 变化自动刷新为新会话路径（渲染协调已就位，无需额外处理）。
+    const forkAt = (node: HistoryNodeEntry): void => {
+      if (sessions === undefined || current === undefined || node.boundarySeq === null) return
+      sessions.fork({ sessionId: current, atSeq: node.boundarySeq, increaseTitle: true })
+        .then((childId) => { sessions?.open(childId) })
+        .catch((error: unknown) => { showHint(`续写失败：${String(error)}`) })
     }
 
     // 行内跳转（异步，含分页兜底）：
@@ -800,6 +821,67 @@ function createLeftColumn(
       fontSize: '10px',
       color: 'var(--dsw-alias-label-secondary)',
     }
+    // 行尾谱系角标（分叉数，点击展开共享会话下拉；设计同 tab）。
+    const badgeStyle: React.CSSProperties = {
+      flex: 'none',
+      padding: '1px 8px',
+      fontSize: '11px',
+      borderRadius: '10px',
+      border: '1px solid var(--dsw-alias-border-l2)',
+      color: 'var(--dsw-alias-brand-primary)',
+      cursor: 'pointer',
+      whiteSpace: 'nowrap',
+    }
+    // 行尾操作簇（角标 + 续写按钮）：相对两行文本垂直居中。
+    const rowActionsStyle: React.CSSProperties = {
+      flex: 'none',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      alignSelf: 'center',
+    }
+    // 「续写」按钮：hover 显现（opacity/pointerEvents 随行 hover 态切换）。
+    const forkButtonStyle: React.CSSProperties = {
+      padding: '2px 8px',
+      fontSize: '11px',
+      border: '1px solid var(--dsw-alias-border-l2)',
+      borderRadius: '6px',
+      background: 'transparent',
+      color: 'var(--dsw-alias-label-primary)',
+      cursor: 'pointer',
+      whiteSpace: 'nowrap',
+      transition: 'opacity 120ms ease',
+    }
+    // 角标下拉（共享会话 + 叶子摘要 + 切换；设计同 tab）。
+    const dropdownStyle: React.CSSProperties = {
+      marginTop: '6px',
+      padding: '6px',
+      borderRadius: '6px',
+      border: '1px solid var(--dsw-alias-border-l1)',
+      background: 'var(--dsw-alias-bg-layer-1)',
+    }
+    const dropdownRowStyle: React.CSSProperties = {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '6px 8px',
+      borderRadius: '4px',
+      cursor: 'pointer',
+    }
+    const dropdownTitleStyle: React.CSSProperties = {
+      fontSize: '12px',
+      color: 'var(--dsw-alias-label-primary)',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    }
+    const dropdownLeafStyle: React.CSSProperties = {
+      fontSize: '11px',
+      color: 'var(--dsw-alias-label-secondary)',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    }
 
     return React.createElement(
       'div',
@@ -854,35 +936,120 @@ function createLeftColumn(
                 { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
                 '暂无节点，等待第一条消息',
               )
-              : nodes.map((node) => React.createElement(
-                'div',
-                {
-                  key: node.nodeKey,
-                  style: rowStyle,
-                  title: node.text !== '' ? node.text : undefined,
-                  onClick: () => jumpToNode(node),
-                },
-                React.createElement(
-                  'span',
-                  { style: { color: 'var(--dsw-alias-brand-primary)', fontSize: '12px' } },
-                  KIND_ICONS[node.kind] ?? KIND_ICONS.other,
-                ),
-                React.createElement(
+              : nodes.map((node) => {
+                const nodeLineage = lineageForNode({
+                  currentSessionId: current as string,
+                  node,
+                  sessions: sessionsList,
+                  index: historyIndex,
+                })
+                const showBadge = nodeLineage.badge > 0
+                const isLineageOpen = lineageOpen[node.nodeKey] === true
+                const rowHovered = hoveredRow === node.nodeKey
+                const forkable = node.boundarySeq !== null
+                return React.createElement(
                   'div',
-                  { style: { minWidth: 0, flex: 1 } },
+                  {
+                    key: node.nodeKey,
+                    style: rowStyle,
+                    title: node.text !== '' ? node.text : undefined,
+                    onClick: () => jumpToNode(node),
+                    onPointerEnter: () => setHoveredRow(node.nodeKey),
+                    onPointerLeave: () => setHoveredRow((prev) => (prev === node.nodeKey ? null : prev)),
+                  },
                   React.createElement(
-                    'div',
-                    { style: rowSummaryStyle },
-                    node.summary !== '' ? node.summary : kindLabel(node.kind),
+                    'span',
+                    { style: { color: 'var(--dsw-alias-brand-primary)', fontSize: '12px' } },
+                    KIND_ICONS[node.kind] ?? KIND_ICONS.other,
                   ),
                   React.createElement(
                     'div',
-                    { style: rowMetaStyle },
-                    `#${node.turn} · seq ${node.startSeq}–${node.endSeq}`
-                    + (node.boundarySeq === null ? ' · 进行中' : ' · 可续写'),
+                    { style: { minWidth: 0, flex: 1 } },
+                    React.createElement(
+                      'div',
+                      { style: rowSummaryStyle },
+                      node.summary !== '' ? node.summary : kindLabel(node.kind),
+                    ),
+                    React.createElement(
+                      'div',
+                      { style: rowMetaStyle },
+                      `#${node.turn} · seq ${node.startSeq}–${node.endSeq}`
+                      + (node.boundarySeq === null ? ' · 进行中' : ' · 可续写'),
+                    ),
                   ),
-                ),
-              )),
+                  React.createElement(
+                    'div',
+                    { style: rowActionsStyle },
+                    showBadge
+                      ? React.createElement(
+                        'span',
+                        {
+                          style: badgeStyle,
+                          title: '查看共享该节点的分叉会话',
+                          onClick: (event: { stopPropagation: () => void }) => {
+                            event.stopPropagation()
+                            toggleLineage(node.nodeKey)
+                          },
+                        },
+                        `分叉 ${nodeLineage.badge}`,
+                      )
+                      : null,
+                    forkable
+                      ? React.createElement(
+                        'button',
+                        {
+                          type: 'button',
+                          style: {
+                            ...forkButtonStyle,
+                            opacity: rowHovered ? 1 : 0,
+                            pointerEvents: rowHovered ? 'auto' : 'none',
+                          },
+                          title: '从该节点 fork 出新会话继续',
+                          onClick: (event: { stopPropagation: () => void }) => {
+                            event.stopPropagation()
+                            forkAt(node)
+                          },
+                        },
+                        '续写',
+                      )
+                      : null,
+                  ),
+                  isLineageOpen && nodeLineage.sharedSessions.length > 0
+                    ? React.createElement(
+                      'div',
+                      {
+                        style: dropdownStyle,
+                        onClick: (event: { stopPropagation: () => void }) => event.stopPropagation(),
+                      },
+                      nodeLineage.sharedSessions.map((shared) => React.createElement(
+                        'div',
+                        {
+                          key: shared.sessionId,
+                          style: dropdownRowStyle,
+                          onClick: () => { sessions?.open(shared.sessionId) },
+                        },
+                        React.createElement(
+                          'div',
+                          { style: { minWidth: 0, flex: 1 } },
+                          React.createElement('div', { style: dropdownTitleStyle }, shared.displayTitle ?? shared.sessionId),
+                          React.createElement(
+                            'div',
+                            { style: dropdownLeafStyle },
+                            shared.nodes !== undefined && shared.nodes.length > 0
+                              ? `叶子：${shared.nodes[shared.nodes.length - 1].summary || kindLabel(shared.nodes[shared.nodes.length - 1].kind)}`
+                              : shared.sessionId,
+                          ),
+                        ),
+                        React.createElement(
+                          'span',
+                          { style: { fontSize: '11px', color: 'var(--dsw-alias-brand-primary)' } },
+                          '切换',
+                        ),
+                      )),
+                    )
+                    : null,
+                )
+              }),
           ),
           // 拖宽手柄：指针捕获 + 直写宽度；双击复位默认宽。
           React.createElement(

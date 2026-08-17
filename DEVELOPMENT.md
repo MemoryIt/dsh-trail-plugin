@@ -7,8 +7,8 @@
 
 ## 1. 当前状态
 
-- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column` 已合并回 main：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠竖条（☰历史，可发现性）+ 拖拽调宽/记忆（240–480、聊天保 480、双击复位 280、localStorage）+ 点击行内跳转（含 loadOlder 分页兜底）+ **渲染协调修复**），81 测试全绿。
-- **待办**：① **host 侧补齐缺 history 的投影缓存**（25/45 会话缺，见 §3 机制与 §7 方案，需重启 GUI）；② 左栏交互补全（fork 续写 → 谱系角标迁移 → 窄屏自动折叠）；③ 旧 tab 去留；④ M5 二级完整路径。
+- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column` 已合并回 main：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠竖条（☰历史，可发现性）+ 拖拽调宽/记忆（240–480、聊天保 480、双击复位 280、localStorage）+ 点击行内跳转（含 loadOlder 分页兜底）+ **渲染协调修复**），81 测试全绿；`feature/left-column-interactions`（左栏交互补全第一轮：行尾谱系角标「分叉 N」+ 下拉切换、行尾「续写」按钮 hover 显现 + fork/open），86 测试全绿。
+- **待办**：① **host 侧补齐缺 history 的投影缓存**（25/45 会话缺，见 §3 机制与 §7 方案，需重启 GUI）；② 左栏交互补全剩 **窄屏自动折叠**（阈值触发，拖拽钳制已就位）+ 跳转高亮 polish；③ 旧 tab 去留；④ M5 二级完整路径。
 - **验证约定**：client bundle 的 rev = 文件 sha1 前 12 位；**实测 web 服务器按请求实时计算 manifest**（`pnpm build` 后浏览器刷新即可见，无需重启 GUI——旧记录"重启才进 boot manifest"已过时）。host 侧（src/index.ts）改动仍需重启 GUI 生效。
 - 环境：DSH 源码在 `/app`（只读参考，禁止修改）；`DSH_HOME=/data/dsh-home`；GUI 在 `127.0.0.1:3080`；dsh CLI 用 `node /app/apps/cli/lib/bin.js`。
 
@@ -98,10 +98,10 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
    - 在 `src/index.ts` apply 里后台（不阻塞启动）遍历 `ctx.sessionPersistence.list()` 的 meta；对 `ctx.sessionProjectionCache.cachedSnapshot(meta)` 缺 `history` 的会话调 `coldSnapshot(meta.id)` 补齐（写回缓存）；
    - 用 ctx.effect 管理 + AbortSignal 支持；只对缺失的会话补（20/45 已有）；
    - **host 改动需重启 GUI 生效**（会中断会话，选时机重启）；改完验证：切到任一旧会话左栏都有节点。
-1. **左栏交互补全**（骨架/拖宽/跳转已完成）：
+1. **左栏交互补全**（骨架/拖宽/跳转已完成；fork 续写 ✅、谱系角标/下拉 ✅）：
    a. ~~点击节点行内跳转~~（完成：`src/jump.ts` 纯映射 + 左栏行 onClick；落点=轮首用户行；**超出已加载窗口自动 `session.loadOlder()` 逐页翻页**（每页 50 条，上限 20 页；hasMore/openState/窗口起点三重守卫防空转）；翻页后轮询等行渲染进 DOM（4s 超时）；失败提示：聊天视图未激活 / 目标节点未加载或不存在）。
-   b. fork 续写入口迁移到左栏行（现有 `sessions.fork + open` 逻辑）。
-   c. 谱系角标/下拉迁移（M4 的节点中心索引在 root scope 直接用 `useSessions` 全量会话列表即可）。
+   b. ~~fork 续写入口迁移到左栏行~~（完成：行尾「续写」按钮 hover 显现（opacity/pointerEvents 随行 hover 态），点击 `sessions.fork({sessionId: current, atSeq: boundarySeq, increaseTitle: true})` → `open(childId)`，失败走 showHint 瞬态提示；进行中节点不渲染按钮）。
+   c. ~~谱系角标/下拉迁移~~（完成：左栏新增全量 `useSessions` selector → `toLineageSessions` → `buildHistoryIndex` → 行尾「分叉 N」胶囊点击展开共享会话下拉（叶子摘要 + 切换），`lineageForNode` 复用，`src/history/*` 零改动）。
    d. **窄屏自动折叠**：convRoot 宽度低于阈值（约 MIN_CHAT + MIN 列宽）自动折叠（拖拽钳制已就位，仅差阈值触发）。
    e. 已知边界：非聊天视图（trajectory/旧 tab）无法编程切换（chatStore 私有）→ 提示用户手动切回；超深历史（>20 页）放弃并提示；跳转高亮留待 polish。
 2. **旧 tab 去留**：左栏稳定后移除 `conversation.view` 注册（或加配置项 A/B）。

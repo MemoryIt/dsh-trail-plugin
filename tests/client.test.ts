@@ -94,6 +94,24 @@ function fakeSessionsState() {
   }
 }
 
+/** 左栏测试用会话 state：当前会话 s-root 带 history 投影（blank: false），
+ * s-a 为其 fork 子会话（供谱系角标/下拉断言）。 */
+function leftColumnSessionsState() {
+  const sessionsState = fakeSessionsState()
+  return {
+    ...sessionsState,
+    current: 's-root',
+    byId: {
+      ...sessionsState.byId,
+      's-root': {
+        ...sessionsState.byId['s-root'],
+        blank: false,
+        projectionValues: { history: fakeProjection() },
+      },
+    },
+  }
+}
+
 /** 递归查找渲染树中带指定 key prop 的元素 props（行节点 key = nodeKey）。
  * 渲染树里 createElement 的 children 可能嵌套数组（如 nodes.map(...) 作为
  * 单个 child 传入），需显式展开数组层。 */
@@ -111,6 +129,27 @@ function findByKey(node: unknown, key: string): Record<string, unknown> | null {
   const children = Array.isArray(element.children) ? element.children : [element.children]
   for (const child of children) {
     const found = findByKey(child, key)
+    if (found !== null) return found
+  }
+  return null
+}
+
+/** 递归查找 children 含精确文本的元素 props（如「续写」按钮）。
+ * 精确匹配：'续写' 不会命中 meta 里的 '可续写'。 */
+function findByText(node: unknown, text: string): Record<string, unknown> | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findByText(child, text)
+      if (found !== null) return found
+    }
+    return null
+  }
+  if (node === null || typeof node !== 'object') return null
+  const element = node as { props?: Record<string, unknown>; children?: unknown }
+  const children = Array.isArray(element.children) ? element.children : [element.children]
+  if (children.some((child) => child === text)) return element.props ?? {}
+  for (const child of children) {
+    const found = findByText(child, text)
     if (found !== null) return found
   }
   return null
@@ -212,6 +251,89 @@ describe('client bundle factory', () => {
         current: 's-blank',
       }),
     })).toBeNull()
+  })
+
+  it('左栏行尾渲染谱系角标（共享会话数，借鉴 tab）', () => {
+    const { registrations, ctx } = fakeCtx()
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }]))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector(leftColumnSessionsState()),
+    })
+    // s-a 与 s-root 共享节点 1（boundarySeq 10 对齐）→ 节点 1 角标 1
+    expect(JSON.stringify(rendered)).toContain('分叉 1')
+  })
+
+  it('角标展开下拉：列出共享会话 + 叶子摘要 + 切换（借鉴 tab）', () => {
+    const { registrations, ctx } = fakeCtx()
+    // 第二个 useState（lineageOpen）预置展开节点 1 的下拉
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }, { '1': true }]))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector(leftColumnSessionsState()),
+    })
+    const text = JSON.stringify(rendered)
+    expect(text).toContain('分叉会话')           // 下拉行标题
+    expect(text).toContain('叶子：分叉后的新问题') // 分支叶子摘要
+    expect(text).toContain('切换')
+  })
+
+  it('行尾「续写」按钮 hover 显现；点击 fork 到节点边界并打开子会话', async () => {
+    const calls: { fork: unknown[]; open: string[] } = { fork: [], open: [] }
+    const sessions = {
+      fork: (opts: unknown) => { calls.fork.push(opts); return Promise.resolve('child-1') },
+      open: (id: string) => { calls.open.push(id) },
+    }
+    const { registrations, ctx } = fakeCtx(sessions)
+    // 第三个 useState（hoveredRow）注入 '1' → 行 1 的续写按钮可见
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }, {}, '1']))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector(leftColumnSessionsState()),
+    })
+    const button = findByText(rendered, '续写')
+    expect(button).not.toBeNull()
+    expect(button?.style?.opacity).toBe(1)
+    expect(typeof button?.onClick).toBe('function')
+    // 点击 → fork({sessionId, atSeq: boundarySeq, increaseTitle}) → open(childId)
+    ;(button?.onClick as (e: { stopPropagation: () => void }) => void)?.({ stopPropagation: () => {} })
+    expect(calls.fork).toEqual([{ sessionId: 's-root', atSeq: 10, increaseTitle: true }])
+    await Promise.resolve()
+    expect(calls.open).toEqual(['child-1'])
+  })
+
+  it('非 hover 时「续写」按钮隐藏（opacity 0，pointerEvents none）', () => {
+    const { registrations, ctx } = fakeCtx()
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }]))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector(leftColumnSessionsState()),
+    })
+    const button = findByText(rendered, '续写')
+    expect(button).not.toBeNull()
+    expect(button?.style?.opacity).toBe(0)
+    expect(button?.style?.pointerEvents).toBe('none')
+  })
+
+  it('进行中节点（boundarySeq null）不渲染「续写」按钮', () => {
+    const { registrations, ctx } = fakeCtx()
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }]))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const sessionsState = leftColumnSessionsState()
+    sessionsState.byId['s-root'].projectionValues.history = {
+      nodes: [node(1, null, '进行中的节点')],
+    }
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector(sessionsState),
+    })
+    const text = JSON.stringify(rendered)
+    expect(text).toContain('进行中')
+    expect(findByText(rendered, '续写')).toBeNull()
   })
 
   it('视图渲染节点 + 谱系角标（共享会话数）', () => {
