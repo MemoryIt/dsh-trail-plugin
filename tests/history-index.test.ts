@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildHistoryIndex, indexNodeKey, lineageForNode, rootOf } from '../src/history/index.js'
-import { sharedPrefixLength, type LineageSessionLike } from '../src/history/lineage.js'
+import type { LineageSessionLike } from '../src/history/lineage.js'
 import type { HistoryNodeEntry } from '../src/history/types.js'
 
 function node(turn: number, boundarySeq: number | null): HistoryNodeEntry {
@@ -104,7 +104,7 @@ describe('buildHistoryIndex', () => {
 })
 
 describe('lineageForNode', () => {
-  it('直系后代：共享节点计数（与 sharedPrefixLength 等价）', () => {
+  it('共享节点计数：同一逻辑节点的全部其他会话（与位置对齐等价）', () => {
     const rootNodes = [node(1, 10), node(2, 20), node(3, 30)]
     const childNodes = [node(1, 10), node(2, 20), node(4, 40)]
     const sessions = [
@@ -112,11 +112,12 @@ describe('lineageForNode', () => {
       session('s-a', 's-root', 0, { nodes: childNodes }),
     ]
     const index = buildHistoryIndex(sessions)
-    // 每个节点：索引口径 == 前缀对齐口径
+    // 每个节点：索引口径 == 同 root + 同位 boundarySeq 相等
     for (const n of rootNodes) {
       const viaIndex = lineageForNode({ currentSessionId: 's-root', node: n, sessions, index }).badge
-      const viaPrefix = sharedPrefixLength(rootNodes, childNodes) > rootNodes.indexOf(n) ? 1 : 0
-      expect(viaIndex).toBe(viaPrefix)
+      const position = rootNodes.indexOf(n)
+      const viaPosition = childNodes[position]?.boundarySeq === n.boundarySeq ? 1 : 0
+      expect(viaIndex).toBe(viaPosition)
     }
     expect(lineageForNode({ currentSessionId: 's-root', node: rootNodes[0], sessions, index }).badge).toBe(1)
     expect(lineageForNode({ currentSessionId: 's-root', node: rootNodes[2], sessions, index }).badge).toBe(0)
@@ -126,7 +127,7 @@ describe('lineageForNode', () => {
     const rootNodes = [node(1, 10), node(2, 20), node(3, 30)]
     const childANodes = [node(1, 10), node(2, 20), node(4, 40)]
     const childBNodes = [node(1, 10), node(2, 20), node(3, 30), node(5, 50)]
-    const grandNodes = [node(1, 10), node(2, 20), node(4, 40), node(6, 60)] // B 的子
+    const grandNodes = [node(1, 10), node(2, 20), node(4, 40), node(6, 60)] // C 是 A 的子
     const sessions = [
       session('s-root', undefined, 0, { nodes: rootNodes }),
       session('s-a', 's-root', 0, { nodes: childANodes }),
@@ -134,21 +135,43 @@ describe('lineageForNode', () => {
       session('s-c', 's-a', 0, { nodes: grandNodes }),
     ]
     const index = buildHistoryIndex(sessions)
-    // 根节点 1：A、B、C 共享 → 角标 3
+    // 从根看：节点 1/2 被 A、B、C 共享 → 角标 3；节点 3 仅 B → 1
     expect(lineageForNode({ currentSessionId: 's-root', node: rootNodes[0], sessions, index }).badge).toBe(3)
-    // 节点 2：A、B、C 共享 → 3
     expect(lineageForNode({ currentSessionId: 's-root', node: rootNodes[1], sessions, index }).badge).toBe(3)
-    // 节点 3：仅 B 共享 → 1
     expect(lineageForNode({ currentSessionId: 's-root', node: rootNodes[2], sessions, index }).badge).toBe(1)
-    // 从 A 看：C 是后代，B 不是
-    expect(lineageForNode({ currentSessionId: 's-a', node: childANodes[0], sessions, index }).badge).toBe(1)
-    expect(lineageForNode({ currentSessionId: 's-a', node: childANodes[1], sessions, index }).badge).toBe(1)
+    // 从 A 看：节点 1/2 被 根/B/C 共享（祖先与兄弟都计入）→ 3；节点 4 仅 C → 1
+    expect(lineageForNode({ currentSessionId: 's-a', node: childANodes[0], sessions, index }).badge).toBe(3)
+    expect(lineageForNode({ currentSessionId: 's-a', node: childANodes[1], sessions, index }).badge).toBe(3)
     expect(lineageForNode({ currentSessionId: 's-a', node: childANodes[2], sessions, index }).badge).toBe(1)
     // 进行中节点恒 0
     expect(lineageForNode({ currentSessionId: 's-root', node: node(9, null), sessions, index }).badge).toBe(0)
   })
 
-  it('祖先不算共享（门控为后代）', () => {
+  it('用户场景：同一逻辑节点看到全部深拷贝分叉（含祖先与兄弟）', () => {
+    // 对话历史0: A→B→C→D  对话历史1: A→B→F（从 B 后分叉）
+    // 对话历史2: A→B→C→G（从 C 后分叉）——下标表示深拷贝，同位置同 boundarySeq
+    const h0 = [node(1, 10), node(2, 20), node(3, 30), node(4, 40)]
+    const h1 = [node(1, 10), node(2, 20), node(5, 50)]
+    const h2 = [node(1, 10), node(2, 20), node(3, 30), node(6, 60)]
+    const sessions = [
+      session('s0', undefined, 0, { nodes: h0 }),
+      session('s1', 's0', 0, { nodes: h1 }),
+      session('s2', 's0', 0, { nodes: h2 }),
+    ]
+    const index = buildHistoryIndex(sessions)
+    // 在对话历史1 中看节点 B（位置 1）：应看到全部其他分叉 → 会话0 与 会话2
+    const lineage = lineageForNode({ currentSessionId: 's1', node: h1[1], sessions, index })
+    expect(lineage.badge).toBe(2)
+    expect(lineage.sharedSessions.map(s => s.sessionId).sort()).toEqual(['s0', 's2'])
+    // 节点 A（位置 0）：同样三个会话共享 → 2
+    expect(lineageForNode({ currentSessionId: 's1', node: h1[0], sessions, index }).badge).toBe(2)
+    // 节点 F（仅会话1 独有）→ 0
+    expect(lineageForNode({ currentSessionId: 's1', node: h1[2], sessions, index }).badge).toBe(0)
+    // 在对话历史2 中看节点 C：会话0 与 会话2 共享 → 1（会话1 没有 C）
+    expect(lineageForNode({ currentSessionId: 's2', node: h2[2], sessions, index }).badge).toBe(1)
+  })
+
+  it('祖先与后代都计入（共享同一逻辑节点）', () => {
     const rootNodes = [node(1, 10), node(2, 20)]
     const childNodes = [node(1, 10), node(2, 20), node(3, 30)]
     const sessions = [
@@ -156,9 +179,9 @@ describe('lineageForNode', () => {
       session('s-child', 's-root', 0, { nodes: childNodes }),
     ]
     const index = buildHistoryIndex(sessions)
-    // 从子会话看：父是祖先，不算 → 角标 0
-    expect(lineageForNode({ currentSessionId: 's-child', node: childNodes[0], sessions, index }).badge).toBe(0)
-    // 从父会话看：子是后代 → 角标 1
+    // 从子会话看：父是祖先，但共享同一逻辑节点 → 计入 → 角标 1
+    expect(lineageForNode({ currentSessionId: 's-child', node: childNodes[0], sessions, index }).badge).toBe(1)
+    // 从父会话看：子是后代 → 同样 1
     expect(lineageForNode({ currentSessionId: 's-root', node: rootNodes[0], sessions, index }).badge).toBe(1)
   })
 })

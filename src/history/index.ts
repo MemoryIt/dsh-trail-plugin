@@ -8,11 +8,11 @@
  * - boundarySeq —— 结构身份：fork 深拷贝保留事件 seq，同一逻辑节点的 turn/end
  *   seq 在整个 fork 树内唯一且位置对齐。
  *
- * 血缘门控仍走官方 parentId（isDescendantOf）：索引只负责 O(1) 找出候选会话，
- * 是否计入角标/下拉由"该会话确实是当前会话的后代"决定——避免纯位置比对的
- * 假阳性。
+ * 血缘由 key 隐含（同 rootId + 同 boundarySeq 即同一逻辑节点，跨树由 rootId
+ * 消歧）：桶内成员就是**共享该逻辑节点的全部会话**（祖先、兄弟、后代都在内）——
+ * 例如 A₀→B₀→C₀、A₁→B₁→F、A₂→B₂→C₂→G 中，节点 B 的桶 = {会话0, 会话1, 会话2}。
  */
-import { isDescendantOf, type LineageSessionLike, type NodeLineage } from './lineage.js'
+import { type LineageSessionLike, type NodeLineage } from './lineage.js'
 import type { HistoryNodeEntry } from './types.js'
 
 /** 节点中心索引：key → 包含该逻辑节点的会话集合（每会话 + 行内位置）。 */
@@ -85,9 +85,11 @@ export function buildHistoryIndex(sessions: readonly LineageSessionLike[]): Hist
 }
 
 /**
- * 查询当前会话某个节点的谱系：索引 O(1) 找候选 + parentId 门控后代。
+ * 查询当前会话某个节点的谱系：索引 O(1) 返回**共享该逻辑节点的全部其他会话**
+ * （祖先/兄弟/后代都在内，如 A_0→B_0→C_0、A_1→B_1→F、A_2→B_2→C_2→G 中，
+ * 在会话 1 看节点 B 会看到会话 0 与 2 两个分叉）。排除自身。
  * 进行中节点（无 boundarySeq）恒返回空谱系。
- * @returns sharedSessions 为解析回完整会话对象的共享后代（含 nodes，供叶子摘要）。
+ * @returns sharedSessions 为解析回完整会话对象的共享会话（含 nodes，供叶子摘要）。
  */
 export function lineageForNode(input: {
   currentSessionId: string
@@ -102,7 +104,6 @@ export function lineageForNode(input: {
   const byId = indexById(sessions)
   const sharedSessions = candidates
     .filter((candidate) => candidate.sessionId !== currentSessionId)
-    .filter((candidate) => isDescendantOf(sessions, candidate.sessionId, currentSessionId))
     .map((candidate) => byId.get(candidate.sessionId))
     .filter((session): session is LineageSessionLike => session !== undefined)
   return { sharedSessions, badge: sharedSessions.length }
