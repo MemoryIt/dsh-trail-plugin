@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import factory from '../src/client.js'
 
-/** 最小 react 桩：createElement + useState（可注入按调用顺序返回的初始值）+ useRef/useLayoutEffect。 */
+/** 最小 react 桩：createElement + useState（可注入按调用顺序返回的初始值）+ useRef/useLayoutEffect。
+ * 同时充当 require 桩：factory 还会 require('@deepseek-ai/dsh-client-ui-primitives')，
+ * 这里提供官方 chevron 组件的桩（fakeReact.createElement 会把它当 type 记录）。 */
 function fakeReact(states: unknown[] = []) {
   let call = 0
   return {
@@ -16,6 +18,8 @@ function fakeReact(states: unknown[] = []) {
     useRef: (initial: unknown) => ({ current: initial }),
     useEffect: () => {},
     useLayoutEffect: () => {},
+    // 官方 primitives 桩（require('@deepseek-ai/dsh-client-ui-primitives') 的解构目标）。
+    IconChevronDownOutline14: () => null,
   }
 }
 
@@ -155,6 +159,56 @@ function findByText(node: unknown, text: string): Record<string, unknown> | null
   return null
 }
 
+/** 递归查找带指定 key prop 的元素（完整元素：props + children，结构断言用）。 */
+function findElementByKey(node: unknown, key: string): { props: Record<string, unknown>; children: unknown[] } | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findElementByKey(child, key)
+      if (found !== null) return found
+    }
+    return null
+  }
+  if (node === null || typeof node !== 'object') return null
+  const element = node as { props?: Record<string, unknown>; children?: unknown }
+  if (element.props?.key === key) {
+    return {
+      props: element.props ?? {},
+      children: Array.isArray(element.children) ? element.children : [element.children],
+    }
+  }
+  const children = Array.isArray(element.children) ? element.children : [element.children]
+  for (const child of children) {
+    const found = findElementByKey(child, key)
+    if (found !== null) return found
+  }
+  return null
+}
+
+/** 递归查找带指定 title prop 的元素（完整元素，如行首分叉 leading 按钮）。 */
+function findElementByTitle(node: unknown, title: string): { props: Record<string, unknown>; children: unknown[] } | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findElementByTitle(child, title)
+      if (found !== null) return found
+    }
+    return null
+  }
+  if (node === null || typeof node !== 'object') return null
+  const element = node as { props?: Record<string, unknown>; children?: unknown }
+  if (element.props?.title === title) {
+    return {
+      props: element.props ?? {},
+      children: Array.isArray(element.children) ? element.children : [element.children],
+    }
+  }
+  const children = Array.isArray(element.children) ? element.children : [element.children]
+  for (const child of children) {
+    const found = findElementByTitle(child, title)
+    if (found !== null) return found
+  }
+  return null
+}
+
 describe('client bundle factory', () => {
   it('返回带 name 与 apply 的插件入口', () => {
     const plugin = factory(() => fakeReact())
@@ -210,10 +264,11 @@ describe('client bundle factory', () => {
     expect(text).toContain('2 个逻辑节点')
     expect(text).toContain('帮我写个插件')
     expect(text).toContain('可续写')
-    // 节点行带点击跳转回调（行 key = nodeKey）
-    const rowProps = findByKey(rendered, '1')
-    expect(rowProps).not.toBeNull()
-    expect(typeof rowProps?.onClick).toBe('function')
+    // 节点行带点击跳转回调（key 在行根 column 上，onClick 在行 div 上）
+    const root = findElementByKey(rendered, '1')
+    expect(root).not.toBeNull()
+    const row = root?.children?.[0] as { props?: Record<string, unknown> } | undefined
+    expect(typeof row?.props?.onClick).toBe('function')
   })
 
   it('折叠态渲染可识别的展开竖条（图标 + 竖排文字）', () => {
@@ -253,7 +308,7 @@ describe('client bundle factory', () => {
     })).toBeNull()
   })
 
-  it('左栏行尾渲染谱系角标（共享会话数，借鉴 tab）', () => {
+  it('左栏行首渲染分叉数字（leading 按钮，取代行尾胶囊）', () => {
     const { registrations, ctx } = fakeCtx()
     const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }]))
     plugin.apply(ctx as never)
@@ -261,8 +316,16 @@ describe('client bundle factory', () => {
     const rendered = overlay?.effect.component({
       useSessions: (selector) => selector(leftColumnSessionsState()),
     })
-    // s-a 与 s-root 共享节点 1（boundarySeq 10 对齐）→ 节点 1 角标 1
-    expect(JSON.stringify(rendered)).toContain('分叉 1')
+    const text = JSON.stringify(rendered)
+    // 行尾「分叉 N」胶囊已移除（数字移到行首）
+    expect(text).not.toContain('分叉 ')
+    // 仅节点 1 有 leading（s-a 共享节点 1 → 数字 1）；节点 2 无分叉 → 不渲染
+    const matches = text.match(/查看共享该节点的分叉会话/g) ?? []
+    expect(matches).toHaveLength(1)
+    const leading = findElementByTitle(rendered, '查看共享该节点的分叉会话')
+    expect(leading).not.toBeNull()
+    const count = leading?.children?.[0] as { children?: unknown[] } | undefined
+    expect(count?.children?.[0]).toBe('1')
   })
 
   it('角标展开下拉：列出共享会话 + 叶子摘要 + 切换（借鉴 tab）', () => {
@@ -278,6 +341,54 @@ describe('client bundle factory', () => {
     expect(text).toContain('分叉会话')           // 下拉行标题
     expect(text).toContain('叶子：分叉后的新问题') // 分支叶子摘要
     expect(text).toContain('切换')
+    // 展开态：行首 leading 显示 chevron（v 型提示，不再是数字）
+    const leading = findElementByTitle(rendered, '查看共享该节点的分叉会话')
+    const first = leading?.children?.[0] as { type?: unknown; props?: Record<string, unknown> } | undefined
+    expect(first).toBeTypeOf('object')
+    expect(first?.type).toBeTypeOf('function') // 官方 chevron 组件桩
+    expect(first?.props?.size).toBe(14)
+  })
+
+  it('展开体是行下方的兄弟（不参与行内 flex，行高不被撑开）+ 缩进', () => {
+    const { registrations, ctx } = fakeCtx()
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }, { '1': true }]))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector(leftColumnSessionsState()),
+    })
+    const root = findElementByKey(rendered, '1')
+    expect(root).not.toBeNull()
+    // 行根 column = [行, 展开体] 两个纵向兄弟
+    expect(root?.children).toHaveLength(2)
+    const row = root?.children?.[0] as { props?: Record<string, unknown> } | undefined
+    const bodyWrap = root?.children?.[1] as { props?: Record<string, unknown> } | undefined
+    // 展开体在行下方：行内不包含分叉内容（不再被行内 flex 挤占；
+    // 注意行首 leading 的 title 含「分叉会话」子串，用下拉独有的「叶子：」断言）
+    expect(JSON.stringify(row)).not.toContain('叶子：')
+    expect(JSON.stringify(bodyWrap)).toContain('叶子：分叉后的新问题')
+    // 展开体相对本历史消息左缩进
+    expect(bodyWrap?.props?.style?.marginLeft).toBe(20)
+  })
+
+  it('行首分叉数字 hover 时变 chevron（v 型下拉提示）', () => {
+    const { registrations, ctx } = fakeCtx()
+    // 第三个 useState（hoveredRow）注入 '1' → 行 1 hover 态
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }, {}, '1']))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector(leftColumnSessionsState()),
+    })
+    const leading = findElementByTitle(rendered, '查看共享该节点的分叉会话')
+    expect(leading).not.toBeNull()
+    // hover 态：不再是数字，而是官方 chevron 组件元素
+    const first = leading?.children?.[0] as { type?: unknown; props?: Record<string, unknown> } | undefined
+    expect(first).toBeTypeOf('object')
+    expect(first?.type).toBeTypeOf('function')
+    expect(first?.props?.size).toBe(14)
+    // aria-expanded 反映展开态（此处折叠 → false）
+    expect(leading?.props?.['aria-expanded']).toBe(false)
   })
 
   it('行尾「续写」按钮 hover 显现；点击 fork 到节点边界并打开子会话', async () => {

@@ -15,6 +15,7 @@
  * 交互：点击节点内联展开；角标（分叉数）点击展开一级下拉（共享会话 +
  * 叶子摘要 + 切换）；boundarySeq 非空的节点可「从这里续写」（sessions.fork）。
  */
+import type { ComponentType } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import { buildHistoryIndex, lineageForNode } from './history/index.js'
 import { type LineageSessionLike } from './history/lineage.js'
@@ -64,6 +65,15 @@ interface SessionFaceLike {
 interface ClientTimer {
   timeout(callback: () => void, delay: number): () => void
   timeout(delay: number): Promise<void>
+}
+
+/**
+ * 官方 primitives（`@deepseek-ai/dsh-client-ui-primitives`，浏览器模块表
+ * external）的最小结构：本轮只复用官方 chevron 元素（tool 行同款），
+ * 颜色随 currentColor。模块表不含时（理论降级）返回 undefined 由调用方兜底。
+ */
+interface ClientPrimitives {
+  IconChevronDownOutline14?: ComponentType<{ size?: number; className?: string }>
 }
 
 /** cordis 插件入口（client 侧）。 */
@@ -402,6 +412,7 @@ function createLeftColumn(
   React: typeof import('react'),
   sessions: ClientSessions | undefined,
   timer: ClientTimer | undefined,
+  primitives: ClientPrimitives,
 ) {
   return function LeftColumn(props: LeftColumnProps): ReturnType<typeof React.createElement> | null {
     const current = props.useSessions((s: unknown) => {
@@ -423,9 +434,9 @@ function createLeftColumn(
     // 偏好（宽度 + 折叠态）全局记忆。宽度在拖拽中走 ref（直写 DOM），松手后提交。
     const [prefs, setPrefs] = React.useState<LeftColumnPrefs>(() => readLeftColumnPrefs())
     const { collapsed } = prefs
-    // 角标下拉展开态（按 nodeKey；点击行尾「分叉 N」胶囊切换）。
+    // 角标下拉展开态（按 nodeKey；点击行首分叉数字/chevron 切换）。
     const [lineageOpen, setLineageOpen] = React.useState<Record<string, boolean>>({})
-    // 行 hover 态（行尾「续写」按钮 hover 显现）。
+    // 行 hover 态（行尾「续写」按钮 hover 显现；行首分叉数字 hover 变 chevron 预览）。
     const [hoveredRow, setHoveredRow] = React.useState<string | null>(null)
     const widthRef = React.useRef(prefs.width)
     const draggingRef = React.useRef(false)
@@ -821,18 +832,37 @@ function createLeftColumn(
       fontSize: '10px',
       color: 'var(--dsw-alias-label-secondary)',
     }
-    // 行尾谱系角标（分叉数，点击展开共享会话下拉；设计同 tab）。
-    const badgeStyle: React.CSSProperties = {
-      flex: 'none',
-      padding: '1px 8px',
-      fontSize: '11px',
-      borderRadius: '10px',
-      border: '1px solid var(--dsw-alias-border-l2)',
-      color: 'var(--dsw-alias-brand-primary)',
-      cursor: 'pointer',
-      whiteSpace: 'nowrap',
+    // 行根（column）：标题行 + 展开体纵向堆叠 —— 展开体是行的下方兄弟，
+    // 不参与行内横向 flex，行高恒定（对齐官方 DisclosureRow 的 root 骨架）。
+    const rowRootStyle: React.CSSProperties = {
+      display: 'flex',
+      flexDirection: 'column',
+      marginBottom: '2px',
+      borderRadius: '6px',
     }
-    // 行尾操作簇（角标 + 续写按钮）：相对两行文本垂直居中。
+    // 行首 leading slot（16px，对齐官方 DisclosureRow）：分叉数字按钮。
+    // 折叠态显示分叉数字，hover / 展开态显示官方 chevron（v 型下拉提示）。
+    const leadingButtonStyle: React.CSSProperties = {
+      flex: 'none',
+      width: 16,
+      height: 16,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      alignSelf: 'center',
+      padding: 0,
+      border: 'none',
+      background: 'transparent',
+      color: 'var(--dsw-alias-label-secondary)',
+      cursor: 'pointer',
+    }
+    const forkCountStyle: React.CSSProperties = {
+      fontSize: '11px',
+      lineHeight: 1,
+      fontWeight: 600,
+      color: 'var(--dsw-alias-brand-primary)',
+    }
+    // 行尾操作簇（仅剩「续写」按钮）：相对两行文本垂直居中。
     const rowActionsStyle: React.CSSProperties = {
       flex: 'none',
       display: 'flex',
@@ -852,13 +882,14 @@ function createLeftColumn(
       whiteSpace: 'nowrap',
       transition: 'opacity 120ms ease',
     }
-    // 角标下拉（共享会话 + 叶子摘要 + 切换；设计同 tab）。
-    const dropdownStyle: React.CSSProperties = {
-      marginTop: '6px',
-      padding: '6px',
-      borderRadius: '6px',
+    // 展开体（行下方兄弟）：相对本历史消息左缩进，与官方展开体同款
+    // 卡片语言（border-l1 + radius + 独立背景）。
+    const bodyWrapStyle: React.CSSProperties = {
+      marginLeft: 20,
+      padding: '4px',
+      borderRadius: '8px',
       border: '1px solid var(--dsw-alias-border-l1)',
-      background: 'var(--dsw-alias-bg-layer-1)',
+      background: 'var(--dsw-alias-bg-base)',
     }
     const dropdownRowStyle: React.CSSProperties = {
       display: 'flex',
@@ -947,78 +978,102 @@ function createLeftColumn(
                 const isLineageOpen = lineageOpen[node.nodeKey] === true
                 const rowHovered = hoveredRow === node.nodeKey
                 const forkable = node.boundarySeq !== null
+                // 行首 leading：分叉数字（hover/展开时变官方 chevron，v 型下拉提示）。
+                const chevronEl = primitives.IconChevronDownOutline14 !== undefined
+                  ? React.createElement(primitives.IconChevronDownOutline14, { size: 14 })
+                  : React.createElement(
+                    'span',
+                    { style: { ...forkCountStyle, color: 'var(--dsw-alias-label-secondary)' } },
+                    '▾',
+                  )
                 return React.createElement(
                   'div',
                   {
                     key: node.nodeKey,
-                    style: rowStyle,
-                    title: node.text !== '' ? node.text : undefined,
-                    onClick: () => jumpToNode(node),
-                    onPointerEnter: () => setHoveredRow(node.nodeKey),
-                    onPointerLeave: () => setHoveredRow((prev) => (prev === node.nodeKey ? null : prev)),
+                    // 行根 column（对齐官方 DisclosureRow）：标题行 + 展开体
+                    // 纵向堆叠；展开体是行的下方兄弟，行高恒定不被撑开。
+                    style: rowRootStyle,
                   },
                   React.createElement(
-                    'span',
-                    { style: { color: 'var(--dsw-alias-brand-primary)', fontSize: '12px' } },
-                    KIND_ICONS[node.kind] ?? KIND_ICONS.other,
-                  ),
-                  React.createElement(
                     'div',
-                    { style: { minWidth: 0, flex: 1 } },
-                    React.createElement(
-                      'div',
-                      { style: rowSummaryStyle },
-                      node.summary !== '' ? node.summary : kindLabel(node.kind),
-                    ),
-                    React.createElement(
-                      'div',
-                      { style: rowMetaStyle },
-                      `#${node.turn} · seq ${node.startSeq}–${node.endSeq}`
-                      + (node.boundarySeq === null ? ' · 进行中' : ' · 可续写'),
-                    ),
-                  ),
-                  React.createElement(
-                    'div',
-                    { style: rowActionsStyle },
+                    {
+                      style: rowStyle,
+                      title: node.text !== '' ? node.text : undefined,
+                      onClick: () => jumpToNode(node),
+                      onPointerEnter: () => setHoveredRow(node.nodeKey),
+                      onPointerLeave: () => setHoveredRow((prev) => (prev === node.nodeKey ? null : prev)),
+                    },
                     showBadge
                       ? React.createElement(
-                        'span',
+                        'button',
                         {
-                          style: badgeStyle,
+                          type: 'button',
+                          style: leadingButtonStyle,
                           title: '查看共享该节点的分叉会话',
+                          'aria-expanded': isLineageOpen,
                           onClick: (event: { stopPropagation: () => void }) => {
                             event.stopPropagation()
                             toggleLineage(node.nodeKey)
                           },
                         },
-                        `分叉 ${nodeLineage.badge}`,
+                        rowHovered || isLineageOpen
+                          ? chevronEl
+                          : React.createElement(
+                            'span',
+                            { style: forkCountStyle },
+                            String(nodeLineage.badge),
+                          ),
                       )
                       : null,
-                    forkable
-                      ? React.createElement(
-                        'button',
-                        {
-                          type: 'button',
-                          style: {
-                            ...forkButtonStyle,
-                            opacity: rowHovered ? 1 : 0,
-                            pointerEvents: rowHovered ? 'auto' : 'none',
+                    React.createElement(
+                      'span',
+                      { style: { color: 'var(--dsw-alias-brand-primary)', fontSize: '12px' } },
+                      KIND_ICONS[node.kind] ?? KIND_ICONS.other,
+                    ),
+                    React.createElement(
+                      'div',
+                      { style: { minWidth: 0, flex: 1 } },
+                      React.createElement(
+                        'div',
+                        { style: rowSummaryStyle },
+                        node.summary !== '' ? node.summary : kindLabel(node.kind),
+                      ),
+                      React.createElement(
+                        'div',
+                        { style: rowMetaStyle },
+                        `#${node.turn} · seq ${node.startSeq}–${node.endSeq}`
+                        + (node.boundarySeq === null ? ' · 进行中' : ' · 可续写'),
+                      ),
+                    ),
+                    React.createElement(
+                      'div',
+                      { style: rowActionsStyle },
+                      forkable
+                        ? React.createElement(
+                          'button',
+                          {
+                            type: 'button',
+                            style: {
+                              ...forkButtonStyle,
+                              opacity: rowHovered ? 1 : 0,
+                              pointerEvents: rowHovered ? 'auto' : 'none',
+                            },
+                            title: '从该节点 fork 出新会话继续',
+                            onClick: (event: { stopPropagation: () => void }) => {
+                              event.stopPropagation()
+                              forkAt(node)
+                            },
                           },
-                          title: '从该节点 fork 出新会话继续',
-                          onClick: (event: { stopPropagation: () => void }) => {
-                            event.stopPropagation()
-                            forkAt(node)
-                          },
-                        },
-                        '续写',
-                      )
-                      : null,
+                          '续写',
+                        )
+                        : null,
+                    ),
                   ),
                   isLineageOpen && nodeLineage.sharedSessions.length > 0
                     ? React.createElement(
                       'div',
                       {
-                        style: dropdownStyle,
+                        style: bodyWrapStyle,
                         onClick: (event: { stopPropagation: () => void }) => event.stopPropagation(),
                       },
                       nodeLineage.sharedSessions.map((shared) => React.createElement(
@@ -1079,6 +1134,10 @@ function createLeftColumn(
  */
 export default function factory(require: BundleRequire): PluginEntry {
   const React = require('react') as typeof import('react')
+  // 官方 primitives（浏览器模块表 external）：只复用官方 chevron 元素，
+  // 与官方 tool 行设计语言一致。缺失时（异常环境）降级为纯文本 ▾。
+  const primitives = (require('@deepseek-ai/dsh-client-ui-primitives')
+    ?? {}) as ClientPrimitives
 
   return {
     name: PLUGIN_NAME,
@@ -1095,7 +1154,7 @@ export default function factory(require: BundleRequire): PluginEntry {
       // 真左栏：shell.overlay 浮动列 + 内容让位 + 拖宽/记忆 + 行内跳转。保留 tab 供对比。
       slots.inject('shell.overlay', () => slots.register(
         { name: 'shell.overlay', id: LEFT_COLUMN_ID, order: 10, label: '历史索引左栏' },
-        createLeftColumn(React, sessions, timer),
+        createLeftColumn(React, sessions, timer, primitives),
       ))
     },
   }

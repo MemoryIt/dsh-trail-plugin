@@ -7,7 +7,7 @@
 
 ## 1. 当前状态
 
-- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column` 已合并回 main：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠竖条（☰历史，可发现性）+ 拖拽调宽/记忆（240–480、聊天保 480、双击复位 280、localStorage）+ 点击行内跳转（含 loadOlder 分页兜底）+ **渲染协调修复**），81 测试全绿；`feature/left-column-interactions`（左栏交互补全第一轮：行尾谱系角标「分叉 N」+ 下拉切换、行尾「续写」按钮 hover 显现 + fork/open），86 测试全绿。
+- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column` 已合并回 main：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠竖条（☰历史，可发现性）+ 拖拽调宽/记忆（240–480、聊天保 480、双击复位 280、localStorage）+ 点击行内跳转（含 loadOlder 分页兜底）+ **渲染协调修复**），81 测试全绿；`feature/left-column-interactions`（左栏交互补全：行尾「续写」按钮 hover 显现 + fork/open；**分叉交互重构**——行首分叉数字（hover 变官方 chevron）点击展开，展开体为**行下方 column 兄弟**（复刻官方 DisclosureRow 骨架，不再作为行内 flex item，行高恒定），复用官方 `@deepseek-ai/dsh-client-ui-primitives` 的 chevron 元素），88 测试全绿。
 - **待办**：① **host 侧补齐缺 history 的投影缓存**（25/45 会话缺，见 §3 机制与 §7 方案，需重启 GUI）；② 左栏交互补全剩 **窄屏自动折叠**（阈值触发，拖拽钳制已就位）+ 跳转高亮 polish；③ 旧 tab 去留；④ M5 二级完整路径。
 - **验证约定**：client bundle 的 rev = 文件 sha1 前 12 位；**实测 web 服务器按请求实时计算 manifest**（`pnpm build` 后浏览器刷新即可见，无需重启 GUI——旧记录"重启才进 boot manifest"已过时）。host 侧（src/index.ts）改动仍需重启 GUI 生效。
 - 环境：DSH 源码在 `/app`（只读参考，禁止修改）；`DSH_HOME=/data/dsh-home`；GUI 在 `127.0.0.1:3080`；dsh CLI 用 `node /app/apps/cli/lib/bin.js`。
@@ -24,7 +24,8 @@
 | **行内跳转走官方 DOM 锚点（左栏后续迭代）** | 聊天行自带 `data-chat-anchor-key`（= 会话快照节点 key），滚动容器 `[data-conversation-scroll]`；历史节点 → 聊天节点映射用 `ctx.sessions.binding(id).session`（ObservableSnapshot\<ConversationSnapshot\>）按 turn/anchorSeq 对齐 |
 | **左栏几何必须实时查询节点（渲染协调）** | `conversation` 槽位是 session-maybe：会话切换时内容按 `epoch` 重挂载（DOM 节点被替换）。若 layout effect 闭包缓存 convRoot/panel 引用 → 切换后指向 detached 节点 → RO 永不触发、`getBoundingClientRect` 全 0 → 面板钉死 (0,0)/0 高（表现：切走切回左栏消失、关侧栏竖条不回位）。**必须**：effect deps 含 current（切换即重跑）、每次 applyLayout/漂移轮询实时 `closest/querySelector`、cleanup 实时清理 |
 | **历史投影对"注册前已沉睡"的旧会话缺失** | history 投影 2026-08-16 注册；此前存在且之后从未打开的会话，checkpoint 从未写 history 缓存行 → 列表行投影无 history（实测 45 会话仅 20 有）。会话**打开**会走 coldSnapshot（缓存行+尾部重放）补齐并写回。列表行投影来源：live 会话 = `sessionProjections.snapshot(session)`（实时），cold 会话 = `sessionProjectionCache.cachedSnapshot(meta)`（只读缓存行） |
-| **client 半区用 esbuild 打自定义 loader bundle** | DSH 静态插件 client 包必须产出 `window.__ModuleLoader__.load({id, factory(require)})`；esbuild 内联所有源码模块，external 只留平台模块（react、@deepseek-ai/cordis 等）由浏览器模块表解析。**zod 只在 host 侧**（`src/history/schema.ts`），client 严禁 import（会打进 bundle） |
+| **client 半区用 esbuild 打自定义 loader bundle** | DSH 静态插件 client 包必须产出 `window.__ModuleLoader__.load({id, factory(require)})`；esbuild 内联所有源码模块，external 只留平台模块（react、@deepseek-ai/cordis、**@deepseek-ai/dsh-client-ui-primitives** 等）由浏览器模块表解析（清单见 `/app/packages/client/web/src/platform.ts` 的 PLATFORM_MODULES）。**zod 只在 host 侧**（`src/history/schema.ts`），client 严禁 import（会打进 bundle）。**官方模块复用走 `require('@deepseek-ai/dsh-client-ui-primitives')` + 本地最小类型**（本地 node_modules 无此包，import 语句会让 tsc 解析失败） |
+| **分叉展开结构 = 行下方 column 兄弟（对齐官方 DisclosureRow）** | 展开体若作行内 flex item 会被横向挤压、撑高整行（曾现 bug：标题被挤占、胶囊被挤到中间）。官方 DisclosureRow 骨架：root column = [行, 展开体]，展开体是行下方兄弟、不参与行内 flex、行高恒定。**不复用 DisclosureRow 组件本体**：① 行点击模型冲突（官方整行点击=展开，我们=跳转，且其无行点击自定义入口）；② 官方 `.row` 固定 24px 行高（CSS module 无覆盖入口），放不下我们的摘要+meta 两行。**复用官方 chevron 元素**（`IconChevronDownOutline14`，模块表 external），hover/展开时行首数字变 chevron（v 型提示），交互语义与官方 tool 行一致 |
 | **不用 host.call / harness.handle** | 那是**动态插件专用** RPC（静态 bundle 无此通道）；静态插件跨平面数据走 client 投影 / Remote（$mount + typert 生成产物，较重，已避免） |
 
 ## 3. 已验证的官方机制（事实清单）
@@ -101,7 +102,7 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
 1. **左栏交互补全**（骨架/拖宽/跳转已完成；fork 续写 ✅、谱系角标/下拉 ✅）：
    a. ~~点击节点行内跳转~~（完成：`src/jump.ts` 纯映射 + 左栏行 onClick；落点=轮首用户行；**超出已加载窗口自动 `session.loadOlder()` 逐页翻页**（每页 50 条，上限 20 页；hasMore/openState/窗口起点三重守卫防空转）；翻页后轮询等行渲染进 DOM（4s 超时）；失败提示：聊天视图未激活 / 目标节点未加载或不存在）。
    b. ~~fork 续写入口迁移到左栏行~~（完成：行尾「续写」按钮 hover 显现（opacity/pointerEvents 随行 hover 态），点击 `sessions.fork({sessionId: current, atSeq: boundarySeq, increaseTitle: true})` → `open(childId)`，失败走 showHint 瞬态提示；进行中节点不渲染按钮）。
-   c. ~~谱系角标/下拉迁移~~（完成：左栏新增全量 `useSessions` selector → `toLineageSessions` → `buildHistoryIndex` → 行尾「分叉 N」胶囊点击展开共享会话下拉（叶子摘要 + 切换），`lineageForNode` 复用，`src/history/*` 零改动）。
+   c. ~~谱系角标/下拉迁移~~（完成：左栏新增全量 `useSessions` selector → `toLineageSessions` → `buildHistoryIndex` → **行首分叉数字**（hover/展开变官方 chevron）点击展开共享会话下拉（叶子摘要 + 切换）；展开体是**行下方 column 兄弟**（复刻官方 DisclosureRow 骨架，marginLeft 20 缩进，不再作为行内 flex item——修复撑高/挤占 bug）；`lineageForNode` 复用，`src/history/*` 零改动）。
    d. **窄屏自动折叠**：convRoot 宽度低于阈值（约 MIN_CHAT + MIN 列宽）自动折叠（拖拽钳制已就位，仅差阈值触发）。
    e. 已知边界：非聊天视图（trajectory/旧 tab）无法编程切换（chatStore 私有）→ 提示用户手动切回；超深历史（>20 页）放弃并提示；跳转高亮留待 polish。
 2. **旧 tab 去留**：左栏稳定后移除 `conversation.view` 注册（或加配置项 A/B）。
