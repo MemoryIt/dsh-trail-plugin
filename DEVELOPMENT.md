@@ -7,7 +7,7 @@
 
 ## 1. 当前状态
 
-- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column` 已合并回 main：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠竖条（☰历史，可发现性）+ 拖拽调宽/记忆（240–480、聊天保 480、双击复位 280、localStorage）+ 点击行内跳转（含 loadOlder 分页兜底）+ **渲染协调修复**），81 测试全绿；`feature/left-column-interactions`（左栏交互补全：行尾「续写」按钮 hover 显现 + fork/open；**分叉交互重构**——行首分叉数字（hover 变官方 chevron）点击展开，展开体为**行下方 column 兄弟**（复刻官方 DisclosureRow 骨架，不再作为行内 flex item，行高恒定），复用官方 `@deepseek-ai/dsh-client-ui-primitives` 的 chevron 元素；**行精简**——每节点单行标题（删 meta「#turn · seq · 可续写」与 kind emoji），行 hover 高亮（interactive-bg-hover），续写按钮改官方 pill 风格（radius 999px）），88 测试全绿。
+- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column` 已合并回 main：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠竖条（☰历史，可发现性）+ 拖拽调宽/记忆（240–480、聊天保 480、双击复位 280、localStorage）+ 点击行内跳转（含 loadOlder 分页兜底）+ **渲染协调修复**），81 测试全绿；`feature/left-column-interactions`（左栏交互补全：行尾「续写」按钮 hover 显现 + fork/open；**分叉交互重构**——行首分叉数字（hover 变官方 chevron）点击展开，展开体为**行下方 column 兄弟**（复刻官方 DisclosureRow 骨架），复用官方 `@deepseek-ai/dsh-client-ui-primitives` 的 chevron 元素；**行精简**——每节点单行标题（删 meta 与 kind emoji）+ hover 高亮，续写按钮改官方 pill 风格；**分支列表同款风格**——展开体内分支行与节点行同款单行样式 + hover 高亮，**只显示叶子摘要**（fork 标题多为「旧标题+数字后缀」无辨识度），无「切换」按钮、整行点击直接 `sessions.open` 跳转），89 测试全绿。
 - **待办**：① **host 侧补齐缺 history 的投影缓存**（25/45 会话缺，见 §3 机制与 §7 方案，需重启 GUI）；② 左栏交互补全剩 **窄屏自动折叠**（阈值触发，拖拽钳制已就位）+ 跳转高亮 polish；③ 旧 tab 去留；④ M5 二级完整路径。
 - **验证约定**：client bundle 的 rev = 文件 sha1 前 12 位；**实测 web 服务器按请求实时计算 manifest**（`pnpm build` 后浏览器刷新即可见，无需重启 GUI——旧记录"重启才进 boot manifest"已过时）。host 侧（src/index.ts）改动仍需重启 GUI 生效。
 - 环境：DSH 源码在 `/app`（只读参考，禁止修改）；`DSH_HOME=/data/dsh-home`；GUI 在 `127.0.0.1:3080`；dsh CLI 用 `node /app/apps/cli/lib/bin.js`。

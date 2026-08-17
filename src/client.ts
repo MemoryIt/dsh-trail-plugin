@@ -438,6 +438,8 @@ function createLeftColumn(
     const [lineageOpen, setLineageOpen] = React.useState<Record<string, boolean>>({})
     // 行 hover 态（行尾「续写」按钮 hover 显现；行首分叉数字 hover 变 chevron 预览）。
     const [hoveredRow, setHoveredRow] = React.useState<string | null>(null)
+    // 分支行 hover 态（展开体里分支列表的 hover 高亮，按 sessionId）。
+    const [hoveredBranch, setHoveredBranch] = React.useState<string | null>(null)
     const widthRef = React.useRef(prefs.width)
     const draggingRef = React.useRef(false)
     const dragStartRef = React.useRef({ x: 0, width: 0, available: 0 })
@@ -891,27 +893,17 @@ function createLeftColumn(
       border: '1px solid var(--dsw-alias-border-l1)',
       background: 'var(--dsw-alias-bg-base)',
     }
-    const dropdownRowStyle: React.CSSProperties = {
+    // 分支行（展开体里的共享会话）：与节点行同款单行风格 ——
+    // 只展示叶子摘要（fork 标题多为「旧标题+数字后缀」无辨识度），
+    // 整行点击即跳转到该分支会话。
+    const branchRowStyle: React.CSSProperties = {
       display: 'flex',
       alignItems: 'center',
       gap: '8px',
-      padding: '6px 8px',
-      borderRadius: '4px',
+      padding: '2px 8px',
+      borderRadius: '6px',
+      marginBottom: '2px',
       cursor: 'pointer',
-    }
-    const dropdownTitleStyle: React.CSSProperties = {
-      fontSize: '12px',
-      color: 'var(--dsw-alias-label-primary)',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-      whiteSpace: 'nowrap',
-    }
-    const dropdownLeafStyle: React.CSSProperties = {
-      fontSize: '11px',
-      color: 'var(--dsw-alias-label-secondary)',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-      whiteSpace: 'nowrap',
     }
 
     return React.createElement(
@@ -1068,31 +1060,31 @@ function createLeftColumn(
                         style: bodyWrapStyle,
                         onClick: (event: { stopPropagation: () => void }) => event.stopPropagation(),
                       },
-                      nodeLineage.sharedSessions.map((shared) => React.createElement(
-                        'div',
-                        {
-                          key: shared.sessionId,
-                          style: dropdownRowStyle,
-                          onClick: () => { sessions?.open(shared.sessionId) },
-                        },
-                        React.createElement(
+                      nodeLineage.sharedSessions.map((shared) => {
+                        // 分支行内容 = 叶子摘要（该分支最后一个节点的摘要）；
+                        // fork 标题多为「旧标题+数字后缀」，不展示。
+                        const leaf = shared.nodes !== undefined && shared.nodes.length > 0
+                          ? shared.nodes[shared.nodes.length - 1].summary || kindLabel(shared.nodes[shared.nodes.length - 1].kind)
+                          : shared.sessionId
+                        const branchHovered = hoveredBranch === shared.sessionId
+                        return React.createElement(
                           'div',
-                          { style: { minWidth: 0, flex: 1 } },
-                          React.createElement('div', { style: dropdownTitleStyle }, shared.displayTitle ?? shared.sessionId),
-                          React.createElement(
-                            'div',
-                            { style: dropdownLeafStyle },
-                            shared.nodes !== undefined && shared.nodes.length > 0
-                              ? `叶子：${shared.nodes[shared.nodes.length - 1].summary || kindLabel(shared.nodes[shared.nodes.length - 1].kind)}`
-                              : shared.sessionId,
-                          ),
-                        ),
-                        React.createElement(
-                          'span',
-                          { style: { fontSize: '11px', color: 'var(--dsw-alias-brand-primary)' } },
-                          '切换',
-                        ),
-                      )),
+                          {
+                            key: shared.sessionId,
+                            style: {
+                              ...branchRowStyle,
+                              background: branchHovered
+                                ? 'var(--dsw-alias-interactive-bg-hover)'
+                                : 'transparent',
+                            },
+                            title: `跳转到该分支：${leaf}`,
+                            onClick: () => { sessions?.open(shared.sessionId) },
+                            onPointerEnter: () => setHoveredBranch(shared.sessionId),
+                            onPointerLeave: () => setHoveredBranch((prev) => (prev === shared.sessionId ? null : prev)),
+                          },
+                          React.createElement('span', { style: rowTitleStyle }, leaf),
+                        )
+                      }),
                     )
                     : null,
                 )

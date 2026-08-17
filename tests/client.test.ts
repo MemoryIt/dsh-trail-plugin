@@ -331,8 +331,10 @@ describe('client bundle factory', () => {
     expect(count?.children?.[0]).toBe('1')
   })
 
-  it('角标展开下拉：列出共享会话 + 叶子摘要 + 切换（借鉴 tab）', () => {
-    const { registrations, ctx } = fakeCtx()
+  it('角标展开下拉：分支行只显示叶子摘要，点击整行跳转（无切换按钮）', () => {
+    const calls: { open: string[] } = { open: [] }
+    const sessions = { open: (id: string) => { calls.open.push(id) } }
+    const { registrations, ctx } = fakeCtx(sessions)
     // 第二个 useState（lineageOpen）预置展开节点 1 的下拉
     const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }, { '1': true }]))
     plugin.apply(ctx as never)
@@ -341,9 +343,16 @@ describe('client bundle factory', () => {
       useSessions: (selector) => selector(leftColumnSessionsState()),
     })
     const text = JSON.stringify(rendered)
-    expect(text).toContain('分叉会话')           // 下拉行标题
-    expect(text).toContain('叶子：分叉后的新问题') // 分支叶子摘要
-    expect(text).toContain('切换')
+    // 无「切换」按钮；分支行只显示叶子摘要（无 displayTitle「分叉会话」）
+    expect(text).not.toContain('切换')
+    const branch = findElementByKey(rendered, 's-a')
+    expect(branch).not.toBeNull()
+    expect(branch?.children).toHaveLength(1) // 单个叶子摘要 span
+    expect(JSON.stringify(branch?.children?.[0])).toContain('分叉后的新问题')
+    expect(JSON.stringify(branch?.children?.[0])).not.toContain('分叉会话')
+    // 分支行（key = sessionId）整行点击 → sessions.open(sessionId)
+    ;(branch?.props.onClick as () => void)?.()
+    expect(calls.open).toEqual(['s-a'])
     // 展开态：行首 leading 显示 chevron（v 型提示，不再是数字）
     const leading = findElementByTitle(rendered, '查看共享该节点的分叉会话')
     const first = leading?.children?.[0] as { type?: unknown; props?: Record<string, unknown> } | undefined
@@ -366,12 +375,25 @@ describe('client bundle factory', () => {
     expect(root?.children).toHaveLength(2)
     const row = root?.children?.[0] as { props?: Record<string, unknown> } | undefined
     const bodyWrap = root?.children?.[1] as { props?: Record<string, unknown> } | undefined
-    // 展开体在行下方：行内不包含分叉内容（不再被行内 flex 挤占；
-    // 注意行首 leading 的 title 含「分叉会话」子串，用下拉独有的「叶子：」断言）
-    expect(JSON.stringify(row)).not.toContain('叶子：')
-    expect(JSON.stringify(bodyWrap)).toContain('叶子：分叉后的新问题')
+    // 展开体在行下方：行内不包含分叉内容（不再被行内 flex 挤占）
+    expect(JSON.stringify(row)).not.toContain('分叉后的新问题')
+    expect(JSON.stringify(bodyWrap)).toContain('分叉后的新问题')
     // 展开体相对本历史消息左缩进
     expect(bodyWrap?.props?.style?.marginLeft).toBe(20)
+  })
+
+  it('分支行 hover 高亮（与节点行同款 interactive-bg-hover）', () => {
+    const { registrations, ctx } = fakeCtx()
+    // 第四个 useState（hoveredBranch）注入 's-a' → 分支行 hover 态
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }, { '1': true }, null, 's-a']))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector(leftColumnSessionsState()),
+    })
+    const branch = findElementByKey(rendered, 's-a')
+    expect(branch).not.toBeNull()
+    expect(branch?.props?.style?.background).toBe('var(--dsw-alias-interactive-bg-hover)')
   })
 
   it('行首分叉数字 hover 时变 chevron（v 型下拉提示）', () => {
