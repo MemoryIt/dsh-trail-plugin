@@ -806,9 +806,9 @@ function createLeftColumn(
     }
     const rowStyle: React.CSSProperties = {
       display: 'flex',
-      alignItems: 'flex-start',
+      alignItems: 'center',
       gap: '8px',
-      padding: '7px 8px',
+      padding: '2px 8px',
       borderRadius: '6px',
       marginBottom: '2px',
       cursor: 'pointer',
@@ -820,17 +820,16 @@ function createLeftColumn(
       background: 'var(--dsw-alias-bg-base)',
       borderBottom: '1px solid var(--dsw-alias-border-l1)',
     }
-    const rowSummaryStyle: React.CSSProperties = {
-      fontSize: '12px',
+    // 单行标题（对齐官方 DisclosureRow 的 title 行）：14px 感 + 截断。
+    const rowTitleStyle: React.CSSProperties = {
+      flex: 1,
+      minWidth: 0,
+      fontSize: '13px',
+      lineHeight: '20px',
       color: 'var(--dsw-alias-label-primary)',
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
-    }
-    const rowMetaStyle: React.CSSProperties = {
-      marginTop: '2px',
-      fontSize: '10px',
-      color: 'var(--dsw-alias-label-secondary)',
     }
     // 行根（column）：标题行 + 展开体纵向堆叠 —— 展开体是行的下方兄弟，
     // 不参与行内横向 flex，行高恒定（对齐官方 DisclosureRow 的 root 骨架）。
@@ -862,22 +861,23 @@ function createLeftColumn(
       fontWeight: 600,
       color: 'var(--dsw-alias-brand-primary)',
     }
-    // 行尾操作簇（仅剩「续写」按钮）：相对两行文本垂直居中。
+    // 行尾操作簇（仅剩「续写」按钮）。
     const rowActionsStyle: React.CSSProperties = {
       flex: 'none',
       display: 'flex',
       alignItems: 'center',
       gap: '6px',
-      alignSelf: 'center',
     }
-    // 「续写」按钮：hover 显现（opacity/pointerEvents 随行 hover 态切换）。
+    // 「续写」按钮：hover 显现（opacity/pointerEvents 随行 hover 态切换）；
+    // 外观对齐官方 tool 行的 Inspect pill（radius 999px + l2 边框 + base 底）。
     const forkButtonStyle: React.CSSProperties = {
       padding: '2px 8px',
       fontSize: '11px',
+      lineHeight: '16px',
       border: '1px solid var(--dsw-alias-border-l2)',
-      borderRadius: '6px',
-      background: 'transparent',
-      color: 'var(--dsw-alias-label-primary)',
+      borderRadius: '999px',
+      background: 'var(--dsw-alias-bg-base)',
+      color: 'var(--dsw-alias-label-secondary)',
       cursor: 'pointer',
       whiteSpace: 'nowrap',
       transition: 'opacity 120ms ease',
@@ -997,7 +997,14 @@ function createLeftColumn(
                   React.createElement(
                     'div',
                     {
-                      style: rowStyle,
+                      // 单行标题行（对齐官方 DisclosureRow 的 .row：24px 感），
+                      // hover 高亮背景（官方列表行同款 interactive-bg-hover）。
+                      style: {
+                        ...rowStyle,
+                        background: rowHovered
+                          ? 'var(--dsw-alias-interactive-bg-hover)'
+                          : 'transparent',
+                      },
                       title: node.text !== '' ? node.text : undefined,
                       onClick: () => jumpToNode(node),
                       onPointerEnter: () => setHoveredRow(node.nodeKey),
@@ -1027,23 +1034,8 @@ function createLeftColumn(
                       : null,
                     React.createElement(
                       'span',
-                      { style: { color: 'var(--dsw-alias-brand-primary)', fontSize: '12px' } },
-                      KIND_ICONS[node.kind] ?? KIND_ICONS.other,
-                    ),
-                    React.createElement(
-                      'div',
-                      { style: { minWidth: 0, flex: 1 } },
-                      React.createElement(
-                        'div',
-                        { style: rowSummaryStyle },
-                        node.summary !== '' ? node.summary : kindLabel(node.kind),
-                      ),
-                      React.createElement(
-                        'div',
-                        { style: rowMetaStyle },
-                        `#${node.turn} · seq ${node.startSeq}–${node.endSeq}`
-                        + (node.boundarySeq === null ? ' · 进行中' : ' · 可续写'),
-                      ),
+                      { style: rowTitleStyle },
+                      node.summary !== '' ? node.summary : kindLabel(node.kind),
                     ),
                     React.createElement(
                       'div',

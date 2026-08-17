@@ -263,7 +263,10 @@ describe('client bundle factory', () => {
     expect(text).toContain('History Index')
     expect(text).toContain('2 个逻辑节点')
     expect(text).toContain('帮我写个插件')
-    expect(text).toContain('可续写')
+    // 单行标题：无 meta 行（#turn · seq · 可续写）与无 kind emoji
+    expect(text).not.toContain('可续写')
+    expect(text).not.toContain('seq ')
+    expect(text).not.toContain('🔀')
     // 节点行带点击跳转回调（key 在行根 column 上，onClick 在行 div 上）
     const root = findElementByKey(rendered, '1')
     expect(root).not.toBeNull()
@@ -442,8 +445,8 @@ describe('client bundle factory', () => {
     const rendered = overlay?.effect.component({
       useSessions: (selector) => selector(sessionsState),
     })
-    const text = JSON.stringify(rendered)
-    expect(text).toContain('进行中')
+    // 单行标题仍渲染；进行中节点无续写按钮
+    expect(JSON.stringify(rendered)).toContain('进行中的节点')
     expect(findByText(rendered, '续写')).toBeNull()
   })
 
