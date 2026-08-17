@@ -61,6 +61,8 @@ interface SessionSummaryLike {
   displayTitle?: string
   parentId?: string
   origin?: string
+  /** 空会话（hero 态）标记：无聊天内容的会话不显示左栏。 */
+  blank?: boolean
   projectionValues?: Record<string, unknown>
 }
 
@@ -68,6 +70,8 @@ interface SessionSummaryLike {
 interface SessionListStateLike {
   ids: string[]
   byId: Record<string, SessionSummaryLike>
+  /** 当前激活会话 id（root scope 标准 kit 提供）。 */
+  current?: string
 }
 
 const KIND_ICONS: Record<string, string> = {
@@ -327,6 +331,241 @@ function createHistoryView(
   }
 }
 
+/** 左栏面板条目 id（shell.overlay list 槽）。 */
+const LEFT_COLUMN_ID = 'dsh-trail-left-column'
+/** 左栏展开宽度（Spike 固定值；拖宽 + 记忆留给后续迭代）。 */
+const LEFT_COLUMN_WIDTH = 280
+/** 折叠后保留的竖向入口条宽度。 */
+const LEFT_COLUMN_RAIL_WIDTH = 28
+
+/** 左栏组件 props：root scope 标准 kit 的 useSessions（无需 session 作用域）。 */
+interface LeftColumnProps {
+  useSessions: (selector: (state: unknown) => unknown) => unknown
+}
+
+/**
+ * 真左栏（Spike）：shell.overlay 浮动列 + 会话列内容让位。
+ *
+ * 挂载点：`shell.overlay`（list 槽，replaceRisk none，AppFrame 的
+ * `[data-shell-overlay]` 浮层内，`position:absolute; inset:0` 覆盖整个三栏
+ * frame）——官方唯一能覆盖会话列的可加性座位，不替换任何官方组件。
+ *
+ * 布局：
+ * - 面板绝对定位到会话列左缘（`[data-slot="conversation"] > div[data-phase]`
+ *   的盒），高度随会话列；ResizeObserver 跟随侧栏拖宽/折叠、窗口变化；
+ * - 内容让位：把会话列根元素的 padding-left 设为列宽，聊天流/header/composer
+ *   整体右移，面板占据左侧条带；卸载/隐藏/折叠时移除 padding 恢复全宽。
+ *
+ * 数据：root scope 标准 kit 的 useSessions —— 当前会话（s.current）+ 会话行
+ * 的 projectionValues.history（与 tab 同一条数据通路，重启恢复）。
+ */
+function createLeftColumn(React: typeof import('react')) {
+  return function LeftColumn(props: LeftColumnProps): ReturnType<typeof React.createElement> | null {
+    const current = props.useSessions((s: unknown) => {
+      const state = s as SessionListStateLike | undefined
+      return state === undefined ? undefined : state.current
+    }) as string | undefined
+    const summary = props.useSessions((s: unknown) => {
+      const state = s as SessionListStateLike | undefined
+      return state === undefined || state.current === undefined ? undefined : state.byId[state.current]
+    }) as SessionSummaryLike | undefined
+    const nodes = (summary?.projectionValues?.history as HistoryIndexState | undefined)?.nodes ?? []
+    const visible = current !== undefined && summary !== undefined && summary.blank !== true
+
+    const [collapsed, setCollapsed] = React.useState(false)
+    const panelRef = React.useRef<HTMLDivElement | null>(null)
+
+    // 几何 + 让位（layout effect：首帧前定位，避免面板闪现到 (0,0)）。
+    // 副作用全部可逆：卸载/隐藏时移除会话列 padding，恢复官方布局。
+    React.useLayoutEffect(() => {
+      if (!visible) return
+      const panel = panelRef.current
+      if (panel === null) return
+      const overlayLayer = panel.closest('[data-shell-overlay]')
+      const frame = overlayLayer?.parentElement ?? null
+      const convRoot = document.querySelector<HTMLElement>('[data-slot="conversation"] > div[data-phase]')
+      if (frame === null || convRoot === null) return
+      const applyLayout = (): void => {
+        const frameRect = frame.getBoundingClientRect()
+        const convRect = convRoot.getBoundingClientRect()
+        panel.style.left = `${convRect.left - frameRect.left}px`
+        panel.style.top = `${convRect.top - frameRect.top}px`
+        panel.style.height = `${convRect.height}px`
+        panel.style.width = `${collapsed ? LEFT_COLUMN_RAIL_WIDTH : LEFT_COLUMN_WIDTH}px`
+        convRoot.style.paddingLeft = collapsed ? '' : `${LEFT_COLUMN_WIDTH}px`
+      }
+      applyLayout()
+      const observer = typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(applyLayout)
+      observer?.observe(convRoot)
+      observer?.observe(frame)
+      window.addEventListener('resize', applyLayout)
+      return () => {
+        observer?.disconnect()
+        window.removeEventListener('resize', applyLayout)
+        convRoot.style.removeProperty('padding-left')
+      }
+    }, [visible, collapsed])
+
+    if (!visible) return null
+
+    const panelStyle: React.CSSProperties = {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      zIndex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      background: 'var(--dsw-alias-bg-layer-1)',
+      borderRight: '1px solid var(--dsw-alias-border-l1)',
+      boxSizing: 'border-box',
+    }
+    const railButtonStyle: React.CSSProperties = {
+      width: '100%',
+      height: '100%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      border: 'none',
+      background: 'transparent',
+      color: 'var(--dsw-alias-label-secondary)',
+      fontSize: '16px',
+      cursor: 'pointer',
+    }
+    const headerStyle: React.CSSProperties = {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '10px 12px 8px',
+      borderBottom: '1px solid var(--dsw-alias-border-l1)',
+    }
+    const titleStyle: React.CSSProperties = {
+      margin: 0,
+      flex: 1,
+      minWidth: 0,
+      fontSize: '14px',
+      fontWeight: 600,
+      color: 'var(--dsw-alias-label-primary)',
+      whiteSpace: 'nowrap',
+    }
+    const countStyle: React.CSSProperties = {
+      flex: 'none',
+      fontSize: '11px',
+      color: 'var(--dsw-alias-label-secondary)',
+    }
+    const toggleButtonStyle: React.CSSProperties = {
+      flex: 'none',
+      padding: '2px 6px',
+      border: 'none',
+      background: 'transparent',
+      color: 'var(--dsw-alias-label-secondary)',
+      fontSize: '14px',
+      cursor: 'pointer',
+    }
+    const listStyle: React.CSSProperties = {
+      flex: 1,
+      minHeight: 0,
+      overflowY: 'auto',
+      padding: '8px',
+    }
+    const rowStyle: React.CSSProperties = {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: '8px',
+      padding: '7px 8px',
+      borderRadius: '6px',
+      marginBottom: '2px',
+    }
+    const rowSummaryStyle: React.CSSProperties = {
+      fontSize: '12px',
+      color: 'var(--dsw-alias-label-primary)',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    }
+    const rowMetaStyle: React.CSSProperties = {
+      marginTop: '2px',
+      fontSize: '10px',
+      color: 'var(--dsw-alias-label-secondary)',
+    }
+
+    return React.createElement(
+      'div',
+      {
+        ref: panelRef,
+        style: { ...panelStyle, width: collapsed ? LEFT_COLUMN_RAIL_WIDTH : LEFT_COLUMN_WIDTH },
+      },
+      collapsed
+        ? React.createElement(
+          'button',
+          {
+            type: 'button',
+            style: railButtonStyle,
+            title: '展开历史索引',
+            onClick: () => setCollapsed(false),
+          },
+          '»',
+        )
+        : React.createElement(
+          React.Fragment,
+          null,
+          React.createElement(
+            'div',
+            { style: headerStyle },
+            React.createElement('h2', { style: titleStyle }, 'History Index'),
+            React.createElement('span', { style: countStyle }, `${nodes.length} 个逻辑节点`),
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                style: toggleButtonStyle,
+                title: '折叠左栏',
+                onClick: () => setCollapsed(true),
+              },
+              '«',
+            ),
+          ),
+          React.createElement(
+            'div',
+            { style: listStyle },
+            nodes.length === 0
+              ? React.createElement(
+                'p',
+                { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
+                '暂无节点，等待第一条消息',
+              )
+              : nodes.map((node) => React.createElement(
+                'div',
+                { key: node.nodeKey, style: rowStyle },
+                React.createElement(
+                  'span',
+                  { style: { color: 'var(--dsw-alias-brand-primary)', fontSize: '12px' } },
+                  KIND_ICONS[node.kind] ?? KIND_ICONS.other,
+                ),
+                React.createElement(
+                  'div',
+                  { style: { minWidth: 0, flex: 1 } },
+                  React.createElement(
+                    'div',
+                    { style: rowSummaryStyle },
+                    node.summary !== '' ? node.summary : kindLabel(node.kind),
+                  ),
+                  React.createElement(
+                    'div',
+                    { style: rowMetaStyle },
+                    `#${node.turn} · seq ${node.startSeq}–${node.endSeq}`
+                    + (node.boundarySeq === null ? ' · 进行中' : ' · 可续写'),
+                  ),
+                ),
+              )),
+          ),
+        ),
+    )
+  }
+}
+
 /**
  * 浏览器 bundle factory：返回 cordis 插件入口。
  * 在 apply 里把 `history` 视图注册进官方 `conversation.view` 视图环，
@@ -344,6 +583,12 @@ export default function factory(require: BundleRequire): PluginEntry {
       slots.inject('conversation.view', () => slots.register(
         { name: 'conversation.view', id: VIEW_ID, order: 20, label: '历史索引' },
         createHistoryView(React, sessions),
+      ))
+
+      // 真左栏（Spike）：shell.overlay 浮动列 + 会话列内容让位。保留 tab 供对比。
+      slots.inject('shell.overlay', () => slots.register(
+        { name: 'shell.overlay', id: LEFT_COLUMN_ID, order: 10, label: '历史索引左栏' },
+        createLeftColumn(React),
       ))
     },
   }

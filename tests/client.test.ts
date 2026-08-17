@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import factory from '../src/client.js'
 
-/** 最小 react 桩：createElement + useState（可注入按调用顺序返回的初始值）。 */
+/** 最小 react 桩：createElement + useState（可注入按调用顺序返回的初始值）+ useRef/useLayoutEffect。 */
 function fakeReact(states: unknown[] = []) {
   let call = 0
   return {
@@ -13,15 +13,18 @@ function fakeReact(states: unknown[] = []) {
       call += 1
       return [value, () => {}]
     },
+    useRef: (initial: unknown) => ({ current: initial }),
+    useEffect: () => {},
+    useLayoutEffect: () => {},
   }
 }
 
 interface FakeEntry {
   options: { id: string; order?: number; label?: string }
   component: (props: {
-    sessionId: string
-    useProjection: (key: string) => unknown
-    useSessions: (selector: (state: unknown) => unknown) => unknown
+    sessionId?: string
+    useProjection?: (key: string) => unknown
+    useSessions?: (selector: (state: unknown) => unknown) => unknown
   }) => unknown
 }
 
@@ -98,16 +101,73 @@ describe('client bundle factory', () => {
     expect(typeof plugin.apply).toBe('function')
   })
 
-  it('apply 把 history 视图注册进 conversation.view 环', () => {
+  it('apply 把 history 视图注册进 conversation.view 环，并注册左栏到 shell.overlay', () => {
     const { registrations, ctx } = fakeCtx()
     const plugin = factory(() => fakeReact())
     plugin.apply(ctx as never)
-    expect(registrations).toHaveLength(1)
-    expect(registrations[0].key).toBe('conversation.view')
+    expect(registrations).toHaveLength(2)
+    expect(registrations.map(r => r.key)).toEqual(['conversation.view', 'shell.overlay'])
     const entry = registrations[0].effect
     expect(entry.options.id).toBe('history')
     expect(entry.options.order).toBe(20)
     expect(entry.options.label).toBe('历史索引')
+  })
+
+  it('左栏条目注册进 shell.overlay（list 槽：id/order/label）', () => {
+    const { registrations, ctx } = fakeCtx()
+    const plugin = factory(() => fakeReact())
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    expect(overlay).toBeDefined()
+    const entry = overlay?.effect
+    expect(entry?.options.id).toBe('dsh-trail-left-column')
+    expect(entry?.options.order).toBe(10)
+    expect(entry?.options.label).toBe('历史索引左栏')
+  })
+
+  it('左栏渲染当前会话的节点列表（root scope useSessions）', () => {
+    const { registrations, ctx } = fakeCtx()
+    const plugin = factory(() => fakeReact([false])) // collapsed = false
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector({
+        ids: ['s-root'],
+        byId: {
+          's-root': {
+            id: 's-root',
+            displayTitle: '根会话',
+            blank: false,
+            projectionValues: { history: fakeProjection() },
+          },
+        },
+        current: 's-root',
+      }),
+    })
+    const text = JSON.stringify(rendered)
+    expect(text).toContain('History Index')
+    expect(text).toContain('2 个逻辑节点')
+    expect(text).toContain('帮我写个插件')
+    expect(text).toContain('可续写')
+  })
+
+  it('左栏在无当前会话或空会话时隐藏', () => {
+    const { registrations, ctx } = fakeCtx()
+    const plugin = factory(() => fakeReact([false]))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    // 无 current → visible=false → 渲染 null
+    expect(overlay?.effect.component({
+      useSessions: (selector) => selector({ ids: [], byId: {} }),
+    })).toBeNull()
+    // 空会话（blank）→ 隐藏
+    expect(overlay?.effect.component({
+      useSessions: (selector) => selector({
+        ids: ['s-blank'],
+        byId: { 's-blank': { id: 's-blank', displayTitle: '空会话', blank: true } },
+        current: 's-blank',
+      }),
+    })).toBeNull()
   })
 
   it('视图渲染节点 + 谱系角标（共享会话数）', () => {
