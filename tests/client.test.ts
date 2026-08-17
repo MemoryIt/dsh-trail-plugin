@@ -275,7 +275,7 @@ describe('client bundle factory', () => {
     expect(typeof row?.props?.onClick).toBe('function')
   })
 
-  it('折叠态渲染可识别的展开竖条（图标 + 竖排文字）', () => {
+  it('折叠态渲染可识别的展开按钮（Fragment 兄弟；面板 0 宽收拢）', () => {
     const { registrations, ctx } = fakeCtx()
     const plugin = factory(() => fakeReact([{ width: 280, collapsed: true }]))
     plugin.apply(ctx as never)
@@ -289,8 +289,15 @@ describe('client bundle factory', () => {
     })
     const text = JSON.stringify(rendered)
     expect(text).toContain('展开历史索引')
-    expect(text).toContain('历史')
     expect(text).toContain('☰')
+    // 折叠态结构：Fragment = [面板(0 宽, 无 borderRight), 展开按钮]
+    const children = Array.isArray(rendered?.children) ? rendered?.children : [rendered?.children]
+    expect(children).toHaveLength(2)
+    const panel = children?.[0] as { props?: Record<string, unknown> } | undefined
+    expect(panel?.props?.style?.width).toBe(0)
+    expect(panel?.props?.style?.borderRight).toBe('none')
+    const button = findElementByTitle(rendered, '展开历史索引')
+    expect(button).not.toBeNull()
   })
 
   it('左栏在无当前会话或空会话时隐藏', () => {

@@ -23,7 +23,7 @@ import { kindLabel } from './history/text.js'
 import type { HistoryIndexState, HistoryNodeEntry } from './history/types.js'
 import { minAnchorSeq, resolveJumpTarget, type JumpChatNodeLike, type JumpChatNodeRawLike } from './jump.js'
 import {
-  LEFT_COLUMN_DEFAULT_WIDTH, LEFT_COLUMN_MAX_WIDTH, LEFT_COLUMN_MIN_WIDTH, LEFT_COLUMN_RAIL_WIDTH,
+  LEFT_COLUMN_DEFAULT_WIDTH, LEFT_COLUMN_MAX_WIDTH, LEFT_COLUMN_MIN_WIDTH,
   clampColumnWidth, readLeftColumnPrefs, writeLeftColumnPrefs,
   type LeftColumnPrefs,
 } from './left-column.js'
@@ -452,6 +452,7 @@ function createLeftColumn(
     const draggingRef = React.useRef(false)
     const dragStartRef = React.useRef({ x: 0, width: 0, available: 0 })
     const panelRef = React.useRef<HTMLDivElement | null>(null)
+    const expandButtonRef = React.useRef<HTMLButtonElement | null>(null)
     const convRootRef = React.useRef<HTMLElement | null>(null)
     const [handleHovered, setHandleHovered] = React.useState(false)
     // 折叠竖条悬停态（可发现性：竖条本身太窄，hover 高亮提示可展开）。
@@ -626,11 +627,22 @@ function createLeftColumn(
         // 拖拽中宽度由拖拽循环直写；这里只跟随几何。
         if (!draggingRef.current) {
           const expanded = collapsed
-            ? LEFT_COLUMN_RAIL_WIDTH
+            ? 0
             : clampColumnWidth(widthRef.current, convRect.width)
           if (!collapsed) widthRef.current = expanded
           panel.style.width = `${expanded}px`
           convRoot.style.paddingLeft = collapsed ? '' : `${expanded}px`
+        }
+        // 折叠态：展开按钮与 header「«」关于分割线镜像对称——
+        // 分割线虚拟位置 = 面板左缘 + 记忆宽度；按钮在分割线另一侧
+        // EXPAND_BUTTON_DIVIDER_GAP 处，垂直中心 = titleRow 中心。
+        if (collapsed) {
+          const button = expandButtonRef.current
+          if (button !== null) {
+            const dividerX = convRect.left - frameRect.left + widthRef.current
+            button.style.left = `${dividerX + EXPAND_BUTTON_DIVIDER_GAP}px`
+            button.style.top = `${convRect.top - frameRect.top + EXPAND_BUTTON_CENTER_Y - 10}px`
+          }
         }
       }
       applyLayout()
@@ -741,32 +753,27 @@ function createLeftColumn(
       borderRight: '1px solid var(--dsw-alias-border-l1)',
       boxSizing: 'border-box',
     }
-    // 折叠竖条：窄条 + 图标 + 竖排"历史"文字 + 悬停高亮，避免被误认为 UI 残留。
-    const railButtonStyle: React.CSSProperties = {
-      width: '100%',
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: '6px',
+    // 折叠态展开按钮：参考 header 的「«」折叠按钮（同款尺寸/配色 + hover
+    // 高亮），与展开态的折叠按钮关于「左栏/对话区」分割线镜像对称——
+    // 高度中心 = header titleRow 中心（convRoot 顶 + 28），距分割线 = header
+    // 右 padding 12。位置由 applyLayout 折叠分支实时计算（frame 坐标系）。
+    const expandButtonStyle: React.CSSProperties = {
+      position: 'absolute',
+      zIndex: 2,
+      padding: '2px 6px',
       border: 'none',
+      borderRadius: '6px',
       background: railHovered ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent',
       color: 'var(--dsw-alias-label-secondary)',
+      fontSize: '14px',
+      lineHeight: '16px',
       cursor: 'pointer',
       transition: 'background 120ms ease',
     }
-    const railIconStyle: React.CSSProperties = {
-      fontSize: '16px',
-      lineHeight: 1,
-      color: 'var(--dsw-alias-brand-primary)',
-    }
-    const railTextStyle: React.CSSProperties = {
-      fontSize: '10px',
-      writingMode: 'vertical-rl',
-      letterSpacing: '2px',
-      userSelect: 'none',
-    }
+    // 展开按钮几何：与「«」对称所需的高度常量（titleRow 中心 y = 12 + 16）。
+    const EXPAND_BUTTON_CENTER_Y = 28
+    // 与「«」关于分割线的镜像距离 = header 右 padding 12px。
+    const EXPAND_BUTTON_DIVIDER_GAP = 12
     // 拖宽手柄：面板右缘 8px 命中条（仿 AppFrame 手柄；展开态渲染）。
     const handleStyle: React.CSSProperties = {
       position: 'absolute',
@@ -952,31 +959,28 @@ function createLeftColumn(
       cursor: 'pointer',
     }
 
+    // 折叠态：面板收拢为 0 宽（无分割线），展开按钮以 Fragment 兄弟悬浮在
+    // header「«」的镜像位置（见 applyLayout 折叠分支）；展开态只渲染面板。
     return React.createElement(
-      'div',
-      {
-        ref: panelRef,
-        // 渲染宽度读 ref：拖拽中的直写值在任意重渲染（会话更新等）下保持，
-        // 不会被未提交的 prefs 拉回。
-        style: { ...panelStyle, width: collapsed ? LEFT_COLUMN_RAIL_WIDTH : widthRef.current },
-      },
-      // 行级 loading 圆环的旋转动画（无 CSS 基建，静态注入一次）。
-      React.createElement('style', null, SPIN_CSS),
-      collapsed
-        ? React.createElement(
-          'button',
-          {
-            type: 'button',
-            style: railButtonStyle,
-            title: '展开历史索引',
-            onClick: toggleCollapsed,
-            onPointerEnter: () => setRailHovered(true),
-            onPointerLeave: () => setRailHovered(false),
+      React.Fragment,
+      null,
+      React.createElement(
+        'div',
+        {
+          ref: panelRef,
+          // 渲染宽度读 ref：拖拽中的直写值在任意重渲染（会话更新等）下保持，
+          // 不会被未提交的 prefs 拉回。折叠时 0 宽 + 无 borderRight。
+          style: {
+            ...panelStyle,
+            width: collapsed ? 0 : widthRef.current,
+            borderRight: collapsed ? 'none' : '1px solid var(--dsw-alias-border-l1)',
           },
-          React.createElement('span', { style: railIconStyle }, '☰'),
-          React.createElement('span', { style: railTextStyle }, '历史'),
-        )
-        : React.createElement(
+        },
+        // 行级 loading 圆环的旋转动画（无 CSS 基建，静态注入一次）。
+        React.createElement('style', null, SPIN_CSS),
+        collapsed
+          ? null
+          : React.createElement(
           React.Fragment,
           null,
           React.createElement(
@@ -1173,6 +1177,22 @@ function createLeftColumn(
             React.createElement('div', { style: handlePillStyle }),
           ),
         ),
+      ),
+      collapsed
+        ? React.createElement(
+          'button',
+          {
+            ref: expandButtonRef,
+            type: 'button',
+            style: expandButtonStyle,
+            title: '展开历史索引',
+            onClick: toggleCollapsed,
+            onPointerEnter: () => setRailHovered(true),
+            onPointerLeave: () => setRailHovered(false),
+          },
+          '☰',
+        )
+        : null,
     )
   }
 }
