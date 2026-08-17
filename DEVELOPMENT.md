@@ -6,7 +6,7 @@
 
 ## 1. 当前状态
 
-- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column`：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠 + 拖拽调宽/记忆 + **点击行内跳转含分页兜底**（目标不在已加载窗口时逐页 `session.loadOlder()` 翻页，hasMore/openState/窗口起点进度三重守卫 + 20 页上限；落点=轮首用户行；等行渲染进 DOM 后 scrollIntoView），80 测试全绿）。
+- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column`：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠（竖条可发现性）+ 拖拽调宽/记忆 + 点击行内跳转（含分页兜底）+ **渲染协调修复**（几何 rAF 自愈 + 250ms 漂移轮询 + 节点引用实时化），81 测试全绿）。
 - **待办**：左栏交互补全（fork 续写 → 谱系角标迁移 → 窄屏自动折叠）、M5（二级完整路径）、行间跳转/续写 UI。
 - **验证约定**：client bundle 的 rev = 文件 sha1 前 12 位；**实测 web 服务器按请求实时计算 manifest**（`pnpm build` 后浏览器刷新即可见，无需重启 GUI——旧记录"重启才进 boot manifest"已过时）。
 - 环境：DSH 源码在 `/app`（只读参考，禁止修改）；`DSH_HOME=/data/dsh-home`；GUI 在 `127.0.0.1:3080`；dsh CLI 用 `node /app/apps/cli/lib/bin.js`。

@@ -532,24 +532,47 @@ function createLeftColumn(
 
     // 几何 + 让位（layout effect：首帧前定位，避免面板闪现到 (0,0)）。
     // 副作用全部可逆：卸载/隐藏时移除会话列 padding，恢复官方布局。
+    //
+    // 渲染协调性（关键）：conversation 槽位是 session-maybe，会话切换时其内容
+    // 按 epoch 重挂载（DOM 节点被替换）。若 effect 闭包缓存了 convRoot/panel
+    // 引用，切换后这些引用指向 detached 节点——RO 永不触发、几何读取全 0，
+    // 侧栏开合等布局变化全部失联（"关闭侧栏竖条不回来"即此）。
+    // 因此：deps 含 current（切换即重跑重建 RO），且每次读取都实时查询节点。
     React.useLayoutEffect(() => {
       if (!visible) return
-      const panel = panelRef.current
-      if (panel === null) return
-      const overlayLayer = panel.closest('[data-shell-overlay]')
-      const frame = overlayLayer?.parentElement ?? null
-      const convRoot = document.querySelector<HTMLElement>('[data-slot="conversation"] > div[data-phase]')
-      if (frame === null || convRoot === null) return
-      convRootRef.current = convRoot
+      const resolveNodes = (): { panel: HTMLDivElement; frame: HTMLElement; convRoot: HTMLElement } | null => {
+        const panel = panelRef.current
+        if (panel === null) return null
+        const frame = panel.closest('[data-shell-overlay]')?.parentElement ?? null
+        const convRoot = document.querySelector<HTMLElement>('[data-slot="conversation"] > div[data-phase]')
+        if (frame === null || convRoot === null) return null
+        return { panel, frame, convRoot }
+      }
+      const nodes = resolveNodes()
+      if (nodes === null) return
+      convRootRef.current = nodes.convRoot
+      let geometryRaf: number | null = null
+      let retries = 0
       const applyLayout = (): void => {
+        const live = resolveNodes()
+        if (live === null) return
+        const { panel, frame, convRoot } = live
         const frameRect = frame.getBoundingClientRect()
         const convRect = convRoot.getBoundingClientRect()
+        // 布局未就绪（0 高度 = 不可信几何）：下帧重试，最多 20 帧（约 1/3s）。
+        if (convRect.height <= 0) {
+          if (retries < 20) {
+            retries += 1
+            geometryRaf = requestAnimationFrame(applyLayout)
+          }
+          return
+        }
+        retries = 0
         panel.style.left = `${convRect.left - frameRect.left}px`
         panel.style.top = `${convRect.top - frameRect.top}px`
         panel.style.height = `${convRect.height}px`
         // 拖拽中宽度由拖拽循环直写；这里只跟随几何。
         if (!draggingRef.current) {
-          // 展开宽度按可用空间钳制（保存的宽度可能已超出窗口），折叠时记 rail 宽。
           const expanded = collapsed
             ? LEFT_COLUMN_RAIL_WIDTH
             : clampColumnWidth(widthRef.current, convRect.width)
@@ -559,21 +582,44 @@ function createLeftColumn(
         }
       }
       applyLayout()
+      // 首帧布局完成后再跑一次，修正 commit 时刻的 0/错位几何。
+      geometryRaf = requestAnimationFrame(applyLayout)
       const observer = typeof ResizeObserver === 'undefined'
         ? null
         : new ResizeObserver(applyLayout)
       // border-box：改 padding 不触发回调，避免与拖拽直写打架。
-      observer?.observe(convRoot, { box: 'border-box' })
-      observer?.observe(frame)
+      observer?.observe(nodes.convRoot, { box: 'border-box' })
+      observer?.observe(nodes.frame)
       window.addEventListener('resize', applyLayout)
+      // 位置漂移自愈：RO 对 grid 列过渡（侧栏开合）等时序不可靠，低频轮询
+      // 校验面板 left 是否漂移出会话列左缘，漂移则重新定位（实时查询节点，
+      // 覆盖节点替换后的引用过期）。
+      const driftTimer = window.setInterval(() => {
+        if (draggingRef.current) return
+        const live = resolveNodes()
+        if (live === null) return
+        const { panel, frame, convRoot } = live
+        const frameRect = frame.getBoundingClientRect()
+        const convRect = convRoot.getBoundingClientRect()
+        if (convRect.height <= 0) return
+        const expectedLeft = convRect.left - frameRect.left
+        const currentLeft = Number.parseFloat(panel.style.left ?? '')
+        if (Number.isNaN(currentLeft) || Math.abs(currentLeft - expectedLeft) > 1) {
+          applyLayout()
+        }
+      }, 250)
       return () => {
+        window.clearInterval(driftTimer)
+        if (geometryRaf !== null) cancelAnimationFrame(geometryRaf)
         observer?.disconnect()
         window.removeEventListener('resize', applyLayout)
         convRootRef.current = null
-        convRoot.style.removeProperty('padding-left')
+        // 清理当前会话列的 padding（实时查询，卸载时也能清到最新节点）。
+        document.querySelector<HTMLElement>('[data-slot="conversation"] > div[data-phase]')
+          ?.style.removeProperty('padding-left')
         hintTimerRef.current?.()
       }
-    }, [visible, collapsed])
+    }, [visible, collapsed, current])
 
     // 拖宽：指针捕获后，pointermove 直写面板宽 + 会话列 paddingLeft。
     const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
@@ -630,6 +676,9 @@ function createLeftColumn(
       position: 'absolute',
       top: 0,
       left: 0,
+      // 初始高度 = 浮层全高：即使几何 effect 因竞态未就绪，面板也不至于 0 高度
+      // 不可见（effect 就绪后会覆盖为会话列精确高度）。
+      height: '100%',
       zIndex: 1,
       display: 'flex',
       flexDirection: 'column',
