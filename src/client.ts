@@ -172,7 +172,9 @@ function createHistoryView(
       maxWidth: '480px',
       padding: '16px',
       borderRadius: '10px',
-      background: 'var(--dsw-alias-bg-layer-1)',
+      // 主表面 = 官方会话区/面板同款 bg-base（layer-1 是 trajectory/settings
+      // 深嵌套专用，常驻面板不用）。
+      background: 'var(--dsw-alias-bg-base)',
       border: '1px solid var(--dsw-alias-border-l1)',
     }
     const itemStyle: React.CSSProperties = {
@@ -717,7 +719,9 @@ function createLeftColumn(
       display: 'flex',
       flexDirection: 'column',
       overflow: 'hidden',
-      background: 'var(--dsw-alias-bg-layer-1)',
+      // 主表面 = 官方会话区/面板同款 bg-base；展开体同为 bg-base + 边框，
+      // 两者同底，靠 border/缩进区分层级（官方 ioCard 模式）。
+      background: 'var(--dsw-alias-bg-base)',
       borderRight: '1px solid var(--dsw-alias-border-l1)',
       boxSizing: 'border-box',
     }
@@ -886,12 +890,11 @@ function createLeftColumn(
     }
     // 展开体（行下方兄弟）：相对本历史消息左缩进，与官方展开体同款
     // 卡片语言（border-l1 + radius + 独立背景）。
+    // 展开体（行下方兄弟）：只靠缩进区分层级，无卡片线框/背景
+    // （叶子行与左栏同底，hover 高亮即交互提示）。
     const bodyWrapStyle: React.CSSProperties = {
       marginLeft: 20,
-      padding: '4px',
-      borderRadius: '8px',
-      border: '1px solid var(--dsw-alias-border-l1)',
-      background: 'var(--dsw-alias-bg-base)',
+      padding: '2px 0',
     }
     // 分支行（展开体里的共享会话）：与节点行同款单行风格 ——
     // 只展示叶子摘要（fork 标题多为「旧标题+数字后缀」无辨识度），
