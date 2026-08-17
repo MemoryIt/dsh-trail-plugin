@@ -1,15 +1,25 @@
 # DEVELOPMENT.md — dsh-trail-plugin 开发上下文（会话交接用）
 
-> 本文件浓缩 2026-08-16（M1–M4 数据链路）+ 2026-08-17（真左栏 feature/left-column）两轮
-> 开发对话的后续开发所需信息。
-> 代码变更历史见 git log（`b32e2ba` 起，里程碑：skeleton → M1–M4 → 左栏 spike/拖宽/跳转/渲染协调）。
+> 本文件浓缩 2026-08-16（M1–M4 数据链路）+ 2026-08-17（真左栏 feature/left-column）+
+> 2026-08-17（左栏交互 feature/left-column-interactions，已 no-ff 合并回 main）三轮开发对话的
+> 后续开发所需信息。
+> 代码变更历史见 git log（`b32e2ba` 起，里程碑：skeleton → M1–M4 → 左栏 spike/拖宽/跳转/渲染协调 →
+> 分叉交互 → 行精简 → 分支列表 → 背景统一 → 跳转指示 → header 对齐 → 折叠按钮）。
 > 详细设计见 `DESIGN.md`（Session Tree / History Index 插件）。
 
 ## 1. 当前状态
 
-- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column` 已合并回 main：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠竖条（☰历史，可发现性）+ 拖拽调宽/记忆（240–480、聊天保 480、双击复位 280、localStorage）+ 点击行内跳转（含 loadOlder 分页兜底）+ **渲染协调修复**），81 测试全绿。
-- **待办**：① **host 侧补齐缺 history 的投影缓存**（25/45 会话缺，见 §3 机制与 §7 方案，需重启 GUI）；② 左栏交互补全（fork 续写 → 谱系角标迁移 → 窄屏自动折叠）；③ 旧 tab 去留；④ M5 二级完整路径。
-- **验证约定**：client bundle 的 rev = 文件 sha1 前 12 位；**实测 web 服务器按请求实时计算 manifest**（`pnpm build` 后浏览器刷新即可见，无需重启 GUI——旧记录"重启才进 boot manifest"已过时）。host 侧（src/index.ts）改动仍需重启 GUI 生效。
+- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column` 已合并回 main：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠竖条（☰历史，可发现性）+ 拖拽调宽/记忆（240–480、聊天保 480、双击复位 280、localStorage）+ 点击行内跳转（含 loadOlder 分页兜底）+ **渲染协调修复**），81 测试全绿；`feature/left-column-interactions`（已 no-ff 合并回 main，8 个提交，91 测试全绿）：
+  - 行尾「续写」按钮 hover 显现 + fork/open（`sessions.fork` → `open(childId)`）；
+  - **分叉交互重构**——行首分叉数字（hover/展开变官方 chevron）点击展开；展开体为**行下方 column 兄弟**（复刻官方 DisclosureRow 骨架，不参与行内 flex、行高恒定，marginLeft 20 缩进无线框）；
+  - **行精简**——每节点单行标题（删 meta 与 kind emoji），行 hover 高亮（interactive-bg-hover），续写按钮改官方 pill 风格（radius 999px）；
+  - **分支列表同款风格**——展开体内分支行与节点行同款单行样式 + hover 高亮，**只显示叶子摘要**（fork 标题多为「旧标题+数字后缀」无辨识度），无「切换」按钮、整行点击直接 `sessions.open` 跳转；
+  - **跳转缓冲指示**——点击节点跳转（尤其 loadOlder 翻页耗时）时，被点击行行尾显示官方 `IconLoadingOutline16` 旋转圆环（注入 style 标签定义 @keyframes），跳转结束/失败自动清除，`jumpGenRef` 世代守卫保证只由最新跳转清除；
+  - **背景统一**——左栏 panel 与 tab 面板 `bg-layer-1` → `bg-base`（官方主表面惯例），展开体去线框（缩进即区分）；
+  - **标题区分隔线对齐官方会话 header**——左栏标题区复刻官方两段式（titleRow 32 + 类 tabs 行 27，节点计数占位），分隔线落 75px 与右侧对话区平齐（box-sizing 坑见 §5）；
+  - **折叠按钮重构**——移除 28px 竖向 rail，折叠态面板 0 宽，☰ 展开按钮作为 Fragment 兄弟悬浮，与 header「«」关于分割线镜像对称（见 §2）。
+- **待办**：① **host 侧补齐缺 history 的投影缓存**（25/45 会话缺，见 §3 机制与 §7 方案，需重启 GUI）；② 左栏交互补全剩 **窄屏自动折叠**（阈值触发，拖拽钳制已就位）+ 跳转高亮 polish；③ 旧 tab 去留；④ M5 二级完整路径。
+- **验证约定**：client bundle 的 rev = 文件 sha1 前 12 位；**实测 web 服务器按请求实时计算 manifest**（`pnpm build` 后浏览器刷新即可见，无需重启 GUI——旧记录"重启才进 boot manifest"已过时）。**注意 curl 首查可能命中 index.html 缓存返回旧 rev，加 cache-buster（`?cb=$(date +%s%N)`）再查**。host 侧（src/index.ts）改动仍需重启 GUI 生效。
 - 环境：DSH 源码在 `/app`（只读参考，禁止修改）；`DSH_HOME=/data/dsh-home`；GUI 在 `127.0.0.1:3080`；dsh CLI 用 `node /app/apps/cli/lib/bin.js`。
 
 ## 2. 架构决策（含理由，勿轻易推翻）
@@ -24,7 +34,12 @@
 | **行内跳转走官方 DOM 锚点（左栏后续迭代）** | 聊天行自带 `data-chat-anchor-key`（= 会话快照节点 key），滚动容器 `[data-conversation-scroll]`；历史节点 → 聊天节点映射用 `ctx.sessions.binding(id).session`（ObservableSnapshot\<ConversationSnapshot\>）按 turn/anchorSeq 对齐 |
 | **左栏几何必须实时查询节点（渲染协调）** | `conversation` 槽位是 session-maybe：会话切换时内容按 `epoch` 重挂载（DOM 节点被替换）。若 layout effect 闭包缓存 convRoot/panel 引用 → 切换后指向 detached 节点 → RO 永不触发、`getBoundingClientRect` 全 0 → 面板钉死 (0,0)/0 高（表现：切走切回左栏消失、关侧栏竖条不回位）。**必须**：effect deps 含 current（切换即重跑）、每次 applyLayout/漂移轮询实时 `closest/querySelector`、cleanup 实时清理 |
 | **历史投影对"注册前已沉睡"的旧会话缺失** | history 投影 2026-08-16 注册；此前存在且之后从未打开的会话，checkpoint 从未写 history 缓存行 → 列表行投影无 history（实测 45 会话仅 20 有）。会话**打开**会走 coldSnapshot（缓存行+尾部重放）补齐并写回。列表行投影来源：live 会话 = `sessionProjections.snapshot(session)`（实时），cold 会话 = `sessionProjectionCache.cachedSnapshot(meta)`（只读缓存行） |
-| **client 半区用 esbuild 打自定义 loader bundle** | DSH 静态插件 client 包必须产出 `window.__ModuleLoader__.load({id, factory(require)})`；esbuild 内联所有源码模块，external 只留平台模块（react、@deepseek-ai/cordis 等）由浏览器模块表解析。**zod 只在 host 侧**（`src/history/schema.ts`），client 严禁 import（会打进 bundle） |
+| **client 半区用 esbuild 打自定义 loader bundle** | DSH 静态插件 client 包必须产出 `window.__ModuleLoader__.load({id, factory(require)})`；esbuild 内联所有源码模块，external 只留平台模块（react、@deepseek-ai/cordis、**@deepseek-ai/dsh-client-ui-primitives** 等）由浏览器模块表解析（清单见 `/app/packages/client/web/src/platform.ts` 的 PLATFORM_MODULES）。**zod 只在 host 侧**（`src/history/schema.ts`），client 严禁 import（会打进 bundle）。**官方模块复用走 `require('@deepseek-ai/dsh-client-ui-primitives')` + 本地最小类型**（本地 node_modules 无此包，import 语句会让 tsc 解析失败） |
+| **分叉展开结构 = 行下方 column 兄弟（对齐官方 DisclosureRow）** | 展开体若作行内 flex item 会被横向挤压、撑高整行（曾现 bug：标题被挤占、胶囊被挤到中间）。官方 DisclosureRow 骨架：root column = [行, 展开体]，展开体是行下方兄弟、不参与行内 flex、行高恒定。**不复用 DisclosureRow 组件本体**：① 行点击模型冲突（官方整行点击=展开，我们=跳转，且其无行点击自定义入口）；② 官方 `.row` 固定 24px 行高（CSS module 无覆盖入口），放不下我们的摘要+meta 两行。**复用官方 chevron 元素**（`IconChevronDownOutline14`，模块表 external），hover/展开时行首数字变 chevron（v 型提示），交互语义与官方 tool 行一致 |
+| **主表面一律 `bg-base`（官方惯例）** | 官方大面积表面全部 bg-base：会话区 ConversationRoot / DetailsPanel / AppFrame / QueueDock / ReasoningRow / GenericCommandCard；`bg-layer-1/2` 只用于 trajectory 表格树 / JsonTree / settings 卡片等深嵌套表面（Modal/HoverCard 用专用 token + 阴影）。左栏 panel 与 tab 面板 bg-layer-1 → bg-base；展开体同底靠边框/缩进区分层级（官方 ioCard 模式），再简化为纯缩进（去线框） |
+| **左栏标题区分隔线 = 官方会话 header 分隔线（75px）** | 官方 header（ConversationRoot.module.css）：padding-top 12 + titleRow min-height 32 + tabs 行（margin-top 4 + tab 高 27 = line-height 16 + padding-bottom 11）；view 环 ≥2 项显示 tabs（chat order0 / trajectory order10 / 我们的 history order20 → 当前 3 项）。分隔线在 12+32+4+27 = **75px** 处。左栏无 tabs，复刻两段式：titleRow(32) + 类 tabs 行（「N 个逻辑节点」占位，样式对齐官方 .tab：13px/16 + label-tertiary），minHeight 75（border-box）使线平齐。**官方布局数值变动需同步此值** |
+| **折叠态 = 面板 0 宽 + 对称展开按钮（Fragment 兄弟）** | 移除 28px 竖向 rail：折叠时 panel 0 宽无 borderRight（聊天区全宽）。☰ 展开按钮必须渲染为**组件返回 Fragment 的兄弟**（panelStyle overflow:hidden 会裁掉面板外内容）。位置与 header「«」关于分割线镜像对称：分割线虚拟位置 = panel 左缘 + 记忆宽度（widthRef 折叠时保留），按钮在另一侧 gap 12px（= header 右 padding），垂直中心 y=28（= titleRow 中心 12+16）；由 applyLayout 折叠分支实时计算 + drift 轮询跟随。`LEFT_COLUMN_RAIL_WIDTH` 常量保留（纯逻辑测试引用）但 client 已不用 |
+| **官方 primitives 复用面** | 从 `@deepseek-ai/dsh-client-ui-primitives`（浏览器模块表 external）复用：`IconChevronDownOutline14`（分叉 chevron）、`IconLoadingOutline16`（跳转缓冲圆环）。均通过 `require('...')` + 本地最小 `ClientPrimitives` 接口（本地 node_modules 无此包）。**无 CSS 基建**：旋转动画用注入 `<style>` 标签定义 @keyframes（SPIN_CSS，静态注入一次） |
 | **不用 host.call / harness.handle** | 那是**动态插件专用** RPC（静态 bundle 无此通道）；静态插件跨平面数据走 client 投影 / Remote（$mount + typert 生成产物，较重，已避免） |
 
 ## 3. 已验证的官方机制（事实清单）
@@ -71,7 +86,7 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
 })()
 ```
 
-判读：`overlaySlot` 缺 → 条目未注册；`panelText` 是 `☰历史` → 折叠态（localStorage 记忆，非 bug）；`panelStyle.left/height` 异常（0/0）或 convPadding 空但面板在 → 几何未定位（渲染协调问题，见 §2）。
+判读：`overlaySlot` 缺 → 条目未注册；折叠态时 panel 0 宽（`panelStyle.width` 为 "0px"），应看到悬浮 ☰ 展开按钮（Fragment 兄弟，`expandButtonRef` 位置由 applyLayout 折叠分支设置）；`panelStyle.left/height` 异常（0/0）或 convPadding 空但面板在 → 几何未定位（渲染协调问题，见 §2）。
 
 ## 5. 踩坑记录
 
@@ -81,7 +96,9 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
 - **测试不参与 typecheck**（tsconfig 只 include src），vitest 只转译不查类型——`pnpm verify` 的 typecheck 步骤不可省。
 - **审批已禁用**：动态插件（cordis_define/cordis_run）的 client 授权会被自动拒绝，验证别走动态插件路径。
 - 当前会话若无后代（例如是 fork 叶子），角标为 0 是**正确行为**；验证角标要切到有 fork 子会话的会话（可先用上面 curl 找 `parentSessionId` 反指某会话的行）。
-- **"刷新后左栏消失"多半是折叠态误判**：折叠态持久化在 localStorage `dsh-trail.left-column`（`{width, collapsed}`），刷新后保持折叠 → 28px 竖条太隐蔽被当成"没了"。先看竖条（诊断 `panelText`），不是 bug；竖条必须保持可发现性（☰ + 竖排"历史"文字 + hover）。
+- **"刷新后左栏消失"多半是折叠态误判**：折叠态持久化在 localStorage `dsh-trail.left-column`（`{width, collapsed}`），刷新后保持折叠。折叠态现在是**面板 0 宽 + 悬浮 ☰ 展开按钮**（与 header「«」对称位置）；按钮很小且悬浮在对话区 header 左侧，找不到会被当成"没了"——先查 `[data-slot="shell.overlay"]` 子元素与 ☰ 按钮（title「展开历史索引」），不是 bug。
+- **box-sizing 坑（header 高度偏高 13px）**：React inline style 默认 `content-box`，`minHeight` 作用于**内容区**（不含 padding）。左栏 header 若 `padding-top 12 + minHeight 44` → 实际总高 12+44=56px，比官方 44px 高 12px。**容器同时设 padding 与 minHeight 时必须 `boxSizing: 'border-box'`**（minHeight 才含 padding）。
+- **curl manifest 缓存时序**：`pnpm build` 后 curl 首页首次可能命中 index.html 缓存返回旧 rev，加 cache-buster（`?cb=$(date +%s%N)`）再查即为新 rev——以 sha1(lib/client.js) 前 12 位为准。
 - **会话切换后左栏消失/竖条漂移 = 引用过期**：conversation 槽位会话切换重挂载（DOM 节点替换），layout effect 闭包若缓存节点引用 → RO 观察 detached 节点永不触发、几何读取全 0。修复组合：effect deps 含 current + 每次实时查询节点 + 几何未就绪 rAF 重试（≤20 帧）+ 250ms 漂移轮询 + panelStyle 初始 height:100%。**改几何逻辑时务必保持这套防御**。
 - **RO 对 grid 列过渡（侧栏开合）时序不可靠**：开侧栏触发、关侧栏可能漏触发 → 位置漂移。250ms 漂移轮询兜底（对比 panel.left 与会话列左缘，漂移>1px 重新定位；拖拽中跳过）。
 
@@ -89,8 +106,10 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
 
 - host：`src/index.ts`（注册投影单元，`stateVersion=2`）；client：`src/client.ts`（default-export factory(require)）。
 - 纯逻辑层 `src/history/`：`types.ts`（节点类型）、`text.ts`（摘要/文本工具）、`summarize.ts`（整句规则摘要）、`fold.ts`（事件折叠 reducer）、`schema.ts`（zod，host-only）、`lineage.ts`（isDescendantOf / sharedPrefixLength）、`index.ts`（节点中心索引：rootOf / buildHistoryIndex / lineageForNode）。
-- **左栏模块**：`src/client.ts` 内 `createLeftColumn`（shell.overlay 面板：几何/让位/拖宽/折叠/行内跳转/瞬态提示）+ `src/left-column.ts`（纯逻辑：`clampColumnWidth` 钳制 240–480/聊天保 480、`readLeftColumnPrefs`/`writeLeftColumnPrefs` localStorage 记忆）+ `src/jump.ts`（纯逻辑：`resolveJumpTarget` 历史节点→聊天节点 key（同 turn 最小 anchorSeq，seq 范围回退）、`minAnchorSeq` 翻页进度判断、`JumpChatNodeLike`/`JumpChatNodeRawLike`）。
-- 测试 `tests/*.test.ts`，import `../src/*.js`；bundle 安全（client 不 import zod、不 import node 内置）；**client.ts 用 DOM API（document/window/ResizeObserver/requestAnimationFrame）**，tsconfig lib 已含 DOM。
+- **左栏模块**：`src/client.ts` 内 `createLeftColumn`（shell.overlay 面板：几何/让位/拖宽/折叠/行内跳转/瞬态提示/跳转缓冲指示/分叉展开/续写）+ `src/left-column.ts`（纯逻辑：`clampColumnWidth` 钳制 240–480/聊天保 480、`readLeftColumnPrefs`/`writeLeftColumnPrefs` localStorage 记忆）+ `src/jump.ts`（纯逻辑：`resolveJumpTarget` 历史节点→聊天节点 key（同 turn 最小 anchorSeq，seq 范围回退）、`minAnchorSeq` 翻页进度判断、`JumpChatNodeLike`/`JumpChatNodeRawLike`）。
+- **左栏组件返回 Fragment**：`[panel div（折叠 0 宽）, collapsed ? ☰ 展开按钮 : null]`——展开按钮必须为 Fragment 兄弟（panel overflow:hidden）；折叠态位置由 `applyLayout` 折叠分支计算（分割线虚拟位置 + EXPAND_BUTTON_DIVIDER_GAP/CENTER_Y 常量）。
+- **左栏 useState 调用序（fakeReact 注入序，勿打乱）**：`prefs(0) → lineageOpen(1) → hoveredRow(2) → hoveredBranch(3) → jumpingNodeKey(4) → handleHovered(5) → railHovered(6) → dragging(7) → hint(8)`。测试用 `fakeReact([...states])` 按调用序注入初始值——**新增 state 必须追加在末尾**，否则现有测试注入错位。
+- 测试 `tests/*.test.ts`，import `../src/*.js`；bundle 安全（client 不 import zod、不 import node 内置）；**client.ts 用 DOM API（document/window/ResizeObserver/requestAnimationFrame）**，tsconfig lib 已含 DOM。渲染树断言 helper：`findByKey/findByText`（props）、`findElementByKey/findElementByTitle`（完整元素含 children，结构断言用）。
 
 ## 7. 下一步（按数据就绪度）
 
@@ -98,10 +117,10 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
    - 在 `src/index.ts` apply 里后台（不阻塞启动）遍历 `ctx.sessionPersistence.list()` 的 meta；对 `ctx.sessionProjectionCache.cachedSnapshot(meta)` 缺 `history` 的会话调 `coldSnapshot(meta.id)` 补齐（写回缓存）；
    - 用 ctx.effect 管理 + AbortSignal 支持；只对缺失的会话补（20/45 已有）；
    - **host 改动需重启 GUI 生效**（会中断会话，选时机重启）；改完验证：切到任一旧会话左栏都有节点。
-1. **左栏交互补全**（骨架/拖宽/跳转已完成）：
+1. **左栏交互补全**（骨架/拖宽/跳转已完成；fork 续写 ✅、谱系角标/下拉 ✅）：
    a. ~~点击节点行内跳转~~（完成：`src/jump.ts` 纯映射 + 左栏行 onClick；落点=轮首用户行；**超出已加载窗口自动 `session.loadOlder()` 逐页翻页**（每页 50 条，上限 20 页；hasMore/openState/窗口起点三重守卫防空转）；翻页后轮询等行渲染进 DOM（4s 超时）；失败提示：聊天视图未激活 / 目标节点未加载或不存在）。
-   b. fork 续写入口迁移到左栏行（现有 `sessions.fork + open` 逻辑）。
-   c. 谱系角标/下拉迁移（M4 的节点中心索引在 root scope 直接用 `useSessions` 全量会话列表即可）。
+   b. ~~fork 续写入口迁移到左栏行~~（完成：行尾「续写」按钮 hover 显现（opacity/pointerEvents 随行 hover 态），点击 `sessions.fork({sessionId: current, atSeq: boundarySeq, increaseTitle: true})` → `open(childId)`，失败走 showHint 瞬态提示；进行中节点不渲染按钮）。
+   c. ~~谱系角标/下拉迁移~~（完成：左栏新增全量 `useSessions` selector → `toLineageSessions` → `buildHistoryIndex` → **行首分叉数字**（hover/展开变官方 chevron）点击展开共享会话下拉（叶子摘要 + 切换）；展开体是**行下方 column 兄弟**（复刻官方 DisclosureRow 骨架，marginLeft 20 缩进，不再作为行内 flex item——修复撑高/挤占 bug）；`lineageForNode` 复用，`src/history/*` 零改动）。
    d. **窄屏自动折叠**：convRoot 宽度低于阈值（约 MIN_CHAT + MIN 列宽）自动折叠（拖拽钳制已就位，仅差阈值触发）。
    e. 已知边界：非聊天视图（trajectory/旧 tab）无法编程切换（chatStore 私有）→ 提示用户手动切回；超深历史（>20 页）放弃并提示；跳转高亮留待 polish。
 2. **旧 tab 去留**：左栏稳定后移除 `conversation.view` 注册（或加配置项 A/B）。

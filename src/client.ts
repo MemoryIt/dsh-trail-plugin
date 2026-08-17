@@ -15,6 +15,7 @@
  * 交互：点击节点内联展开；角标（分叉数）点击展开一级下拉（共享会话 +
  * 叶子摘要 + 切换）；boundarySeq 非空的节点可「从这里续写」（sessions.fork）。
  */
+import type { ComponentType } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import { buildHistoryIndex, lineageForNode } from './history/index.js'
 import { type LineageSessionLike } from './history/lineage.js'
@@ -22,7 +23,7 @@ import { kindLabel } from './history/text.js'
 import type { HistoryIndexState, HistoryNodeEntry } from './history/types.js'
 import { minAnchorSeq, resolveJumpTarget, type JumpChatNodeLike, type JumpChatNodeRawLike } from './jump.js'
 import {
-  LEFT_COLUMN_DEFAULT_WIDTH, LEFT_COLUMN_MAX_WIDTH, LEFT_COLUMN_MIN_WIDTH, LEFT_COLUMN_RAIL_WIDTH,
+  LEFT_COLUMN_DEFAULT_WIDTH, LEFT_COLUMN_MAX_WIDTH, LEFT_COLUMN_MIN_WIDTH,
   clampColumnWidth, readLeftColumnPrefs, writeLeftColumnPrefs,
   type LeftColumnPrefs,
 } from './left-column.js'
@@ -65,6 +66,19 @@ interface ClientTimer {
   timeout(callback: () => void, delay: number): () => void
   timeout(delay: number): Promise<void>
 }
+
+/**
+ * 官方 primitives（`@deepseek-ai/dsh-client-ui-primitives`，浏览器模块表
+ * external）的最小结构：复用官方 chevron（分叉展开）与 loading 圆环
+ * （跳转指示），颜色随 currentColor。模块表不含时（理论降级）由调用方兜底。
+ */
+interface ClientPrimitives {
+  IconChevronDownOutline14?: ComponentType<{ size?: number; className?: string }>
+  IconLoadingOutline16?: ComponentType<{ size?: number; className?: string }>
+}
+
+/** 行级 loading 圆环的旋转动画（无 CSS 基建，一次性注入 style 标签）。 */
+const SPIN_CSS = '@keyframes dsh-trail-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }'
 
 /** cordis 插件入口（client 侧）。 */
 interface PluginEntry {
@@ -162,7 +176,9 @@ function createHistoryView(
       maxWidth: '480px',
       padding: '16px',
       borderRadius: '10px',
-      background: 'var(--dsw-alias-bg-layer-1)',
+      // 主表面 = 官方会话区/面板同款 bg-base（layer-1 是 trajectory/settings
+      // 深嵌套专用，常驻面板不用）。
+      background: 'var(--dsw-alias-bg-base)',
       border: '1px solid var(--dsw-alias-border-l1)',
     }
     const itemStyle: React.CSSProperties = {
@@ -402,6 +418,7 @@ function createLeftColumn(
   React: typeof import('react'),
   sessions: ClientSessions | undefined,
   timer: ClientTimer | undefined,
+  primitives: ClientPrimitives,
 ) {
   return function LeftColumn(props: LeftColumnProps): ReturnType<typeof React.createElement> | null {
     const current = props.useSessions((s: unknown) => {
@@ -413,15 +430,29 @@ function createLeftColumn(
       return state === undefined || state.current === undefined ? undefined : state.byId[state.current]
     }) as SessionSummaryLike | undefined
     const nodes = (summary?.projectionValues?.history as HistoryIndexState | undefined)?.nodes ?? []
+    // 全量会话列表 → 节点中心索引（谱系角标：共享该逻辑节点的其他会话，
+    // 纯 client 派生，与 tab 同一条数据通路；root scope useSessions 自带全量列表）。
+    const sessionListState = props.useSessions((s: unknown) => s) as SessionListStateLike | undefined
+    const sessionsList = toLineageSessions(sessionListState)
+    const historyIndex = buildHistoryIndex(sessionsList)
     const visible = current !== undefined && summary !== undefined && summary.blank !== true
 
     // 偏好（宽度 + 折叠态）全局记忆。宽度在拖拽中走 ref（直写 DOM），松手后提交。
     const [prefs, setPrefs] = React.useState<LeftColumnPrefs>(() => readLeftColumnPrefs())
     const { collapsed } = prefs
+    // 角标下拉展开态（按 nodeKey；点击行首分叉数字/chevron 切换）。
+    const [lineageOpen, setLineageOpen] = React.useState<Record<string, boolean>>({})
+    // 行 hover 态（行尾「续写」按钮 hover 显现；行首分叉数字 hover 变 chevron 预览）。
+    const [hoveredRow, setHoveredRow] = React.useState<string | null>(null)
+    // 分支行 hover 态（展开体里分支列表的 hover 高亮，按 sessionId）。
+    const [hoveredBranch, setHoveredBranch] = React.useState<string | null>(null)
+    // 跳转中指示（行级）：正在翻页/等待渲染的节点 key，结束自动清除。
+    const [jumpingNodeKey, setJumpingNodeKey] = React.useState<string | null>(null)
     const widthRef = React.useRef(prefs.width)
     const draggingRef = React.useRef(false)
     const dragStartRef = React.useRef({ x: 0, width: 0, available: 0 })
     const panelRef = React.useRef<HTMLDivElement | null>(null)
+    const expandButtonRef = React.useRef<HTMLButtonElement | null>(null)
     const convRootRef = React.useRef<HTMLElement | null>(null)
     const [handleHovered, setHandleHovered] = React.useState(false)
     // 折叠竖条悬停态（可发现性：竖条本身太窄，hover 高亮提示可展开）。
@@ -444,6 +475,18 @@ function createLeftColumn(
     }
     const toggleCollapsed = (): void => {
       commitPrefs({ width: widthRef.current, collapsed: !collapsed })
+    }
+
+    const toggleLineage = (nodeKey: string): void => {
+      setLineageOpen((prev) => ({ ...prev, [nodeKey]: !prev[nodeKey] }))
+    }
+    // 行尾「续写」：官方 fork 到该节点边界 → 打开子会话。左栏随 current
+    // 变化自动刷新为新会话路径（渲染协调已就位，无需额外处理）。
+    const forkAt = (node: HistoryNodeEntry): void => {
+      if (sessions === undefined || current === undefined || node.boundarySeq === null) return
+      sessions.fork({ sessionId: current, atSeq: node.boundarySeq, increaseTitle: true })
+        .then((childId) => { sessions?.open(childId) })
+        .catch((error: unknown) => { showHint(`续写失败：${String(error)}`) })
     }
 
     // 行内跳转（异步，含分页兜底）：
@@ -473,6 +516,13 @@ function createLeftColumn(
       }
       const gen = jumpGenRef.current + 1
       jumpGenRef.current = gen
+      // 行级跳转指示：翻页/等待渲染期间给用户缓冲反馈（最新一次跳转接管）。
+      setJumpingNodeKey(node.nodeKey)
+      // 结束路径统一清除：仅最新跳转（gen 未失效）负责清除，被覆盖时
+      // 由新跳转接管（避免旧跳转闪掉新指示）。
+      const finishJump = (): void => {
+        if (gen === jumpGenRef.current) setJumpingNodeKey(null)
+      }
       void (async () => {
         // 快照 → 候选列表（turn/seq 对齐映射）
         const readCandidates = (): JumpChatNodeLike[] | null => {
@@ -509,6 +559,7 @@ function createLeftColumn(
         const key = await resolveWithPaging()
         if (gen !== jumpGenRef.current) return
         if (key === null) {
+          finishJump()
           showHint('目标节点未加载或不存在')
           return
         }
@@ -523,9 +574,11 @@ function createLeftColumn(
         }
         if (gen !== jumpGenRef.current) return
         if (row === null) {
+          finishJump()
           showHint('聊天视图未激活，请先切到聊天')
           return
         }
+        finishJump()
         row.scrollIntoView({ block: 'start' })
       })()
     }
@@ -574,11 +627,22 @@ function createLeftColumn(
         // 拖拽中宽度由拖拽循环直写；这里只跟随几何。
         if (!draggingRef.current) {
           const expanded = collapsed
-            ? LEFT_COLUMN_RAIL_WIDTH
+            ? 0
             : clampColumnWidth(widthRef.current, convRect.width)
           if (!collapsed) widthRef.current = expanded
           panel.style.width = `${expanded}px`
           convRoot.style.paddingLeft = collapsed ? '' : `${expanded}px`
+        }
+        // 折叠态：展开按钮与 header「«」关于分割线镜像对称——
+        // 分割线虚拟位置 = 面板左缘 + 记忆宽度；按钮在分割线另一侧
+        // EXPAND_BUTTON_DIVIDER_GAP 处，垂直中心 = titleRow 中心。
+        if (collapsed) {
+          const button = expandButtonRef.current
+          if (button !== null) {
+            const dividerX = convRect.left - frameRect.left + widthRef.current
+            button.style.left = `${dividerX + EXPAND_BUTTON_DIVIDER_GAP}px`
+            button.style.top = `${convRect.top - frameRect.top + EXPAND_BUTTON_CENTER_Y - 10}px`
+          }
         }
       }
       applyLayout()
@@ -683,36 +747,33 @@ function createLeftColumn(
       display: 'flex',
       flexDirection: 'column',
       overflow: 'hidden',
-      background: 'var(--dsw-alias-bg-layer-1)',
+      // 主表面 = 官方会话区/面板同款 bg-base；展开体同为 bg-base + 边框，
+      // 两者同底，靠 border/缩进区分层级（官方 ioCard 模式）。
+      background: 'var(--dsw-alias-bg-base)',
       borderRight: '1px solid var(--dsw-alias-border-l1)',
       boxSizing: 'border-box',
     }
-    // 折叠竖条：窄条 + 图标 + 竖排"历史"文字 + 悬停高亮，避免被误认为 UI 残留。
-    const railButtonStyle: React.CSSProperties = {
-      width: '100%',
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: '6px',
+    // 折叠态展开按钮：参考 header 的「«」折叠按钮（同款尺寸/配色 + hover
+    // 高亮），与展开态的折叠按钮关于「左栏/对话区」分割线镜像对称——
+    // 高度中心 = header titleRow 中心（convRoot 顶 + 28），距分割线 = header
+    // 右 padding 12。位置由 applyLayout 折叠分支实时计算（frame 坐标系）。
+    const expandButtonStyle: React.CSSProperties = {
+      position: 'absolute',
+      zIndex: 2,
+      padding: '2px 6px',
       border: 'none',
+      borderRadius: '6px',
       background: railHovered ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent',
       color: 'var(--dsw-alias-label-secondary)',
+      fontSize: '14px',
+      lineHeight: '16px',
       cursor: 'pointer',
       transition: 'background 120ms ease',
     }
-    const railIconStyle: React.CSSProperties = {
-      fontSize: '16px',
-      lineHeight: 1,
-      color: 'var(--dsw-alias-brand-primary)',
-    }
-    const railTextStyle: React.CSSProperties = {
-      fontSize: '10px',
-      writingMode: 'vertical-rl',
-      letterSpacing: '2px',
-      userSelect: 'none',
-    }
+    // 展开按钮几何：与「«」对称所需的高度常量（titleRow 中心 y = 12 + 16）。
+    const EXPAND_BUTTON_CENTER_Y = 28
+    // 与「«」关于分割线的镜像距离 = header 右 padding 12px。
+    const EXPAND_BUTTON_DIVIDER_GAP = 12
     // 拖宽手柄：面板右缘 8px 命中条（仿 AppFrame 手柄；展开态渲染）。
     const handleStyle: React.CSSProperties = {
       position: 'absolute',
@@ -736,12 +797,26 @@ function createLeftColumn(
       opacity: handleHovered || dragging ? 1 : 0,
       transition: 'opacity 120ms ease',
     }
+    // 标题区复刻官方会话 header 两段式（ConversationRoot.module.css）：
+    // titleRow(min-height 32) + tabs 行(margin-top 4 + 27)。当前会话 view 环
+    // 有 chat/trajectory/history 3 项 → 官方 header 显示 tabs 行，分隔线在
+    // 12 + 32 + 4 + 27 = 75px 处。左栏无 tabs，把节点计数放到 tabs 行位置
+    // （样式对齐官方 .tab），让标题/内容分隔线与右侧对话区同水平线。
+    // box-sizing: border-box 保证 minHeight 含 padding（content-box 下会
+    // 多出 padding-top 12px——此前偏高 13px 的根因）。
     const headerStyle: React.CSSProperties = {
+      display: 'flex',
+      flexDirection: 'column',
+      boxSizing: 'border-box',
+      padding: '12px 12px 0',
+      minHeight: 75,
+      borderBottom: '1px solid var(--dsw-alias-border-l2)',
+    }
+    const titleRowStyle: React.CSSProperties = {
       display: 'flex',
       alignItems: 'center',
       gap: '8px',
-      padding: '10px 12px 8px',
-      borderBottom: '1px solid var(--dsw-alias-border-l1)',
+      minHeight: 32,
     }
     const titleStyle: React.CSSProperties = {
       margin: 0,
@@ -752,10 +827,16 @@ function createLeftColumn(
       color: 'var(--dsw-alias-label-primary)',
       whiteSpace: 'nowrap',
     }
+    // 节点计数占据官方 tabs 行位置（对齐 .tab 文本：13px/16 + label-tertiary）。
+    const countRowStyle: React.CSSProperties = {
+      marginTop: 4,
+      paddingLeft: 8,
+    }
     const countStyle: React.CSSProperties = {
-      flex: 'none',
-      fontSize: '11px',
-      color: 'var(--dsw-alias-label-secondary)',
+      fontSize: '13px',
+      lineHeight: '16px',
+      fontWeight: 500,
+      color: 'var(--dsw-alias-label-tertiary)',
     }
     const toggleButtonStyle: React.CSSProperties = {
       flex: 'none',
@@ -774,9 +855,9 @@ function createLeftColumn(
     }
     const rowStyle: React.CSSProperties = {
       display: 'flex',
-      alignItems: 'flex-start',
+      alignItems: 'center',
       gap: '8px',
-      padding: '7px 8px',
+      padding: '2px 8px',
       borderRadius: '6px',
       marginBottom: '2px',
       cursor: 'pointer',
@@ -788,58 +869,142 @@ function createLeftColumn(
       background: 'var(--dsw-alias-bg-base)',
       borderBottom: '1px solid var(--dsw-alias-border-l1)',
     }
-    const rowSummaryStyle: React.CSSProperties = {
-      fontSize: '12px',
+    // 单行标题（对齐官方 DisclosureRow 的 title 行）：14px 感 + 截断。
+    const rowTitleStyle: React.CSSProperties = {
+      flex: 1,
+      minWidth: 0,
+      fontSize: '13px',
+      lineHeight: '20px',
       color: 'var(--dsw-alias-label-primary)',
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
     }
-    const rowMetaStyle: React.CSSProperties = {
-      marginTop: '2px',
-      fontSize: '10px',
+    // 行根（column）：标题行 + 展开体纵向堆叠 —— 展开体是行的下方兄弟，
+    // 不参与行内横向 flex，行高恒定（对齐官方 DisclosureRow 的 root 骨架）。
+    const rowRootStyle: React.CSSProperties = {
+      display: 'flex',
+      flexDirection: 'column',
+      marginBottom: '2px',
+      borderRadius: '6px',
+    }
+    // 行首 leading slot（16px，对齐官方 DisclosureRow）：分叉数字按钮。
+    // 折叠态显示分叉数字，hover / 展开态显示官方 chevron（v 型下拉提示）。
+    const leadingButtonStyle: React.CSSProperties = {
+      flex: 'none',
+      width: 16,
+      height: 16,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      alignSelf: 'center',
+      padding: 0,
+      border: 'none',
+      background: 'transparent',
       color: 'var(--dsw-alias-label-secondary)',
+      cursor: 'pointer',
+    }
+    const forkCountStyle: React.CSSProperties = {
+      fontSize: '11px',
+      lineHeight: 1,
+      fontWeight: 600,
+      color: 'var(--dsw-alias-brand-primary)',
+    }
+    // 行尾操作簇（仅剩「续写」按钮）。
+    const rowActionsStyle: React.CSSProperties = {
+      flex: 'none',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+    }
+    // 「续写」按钮：hover 显现（opacity/pointerEvents 随行 hover 态切换）；
+    // 外观对齐官方 tool 行的 Inspect pill（radius 999px + l2 边框 + base 底）。
+    const forkButtonStyle: React.CSSProperties = {
+      padding: '2px 8px',
+      fontSize: '11px',
+      lineHeight: '16px',
+      border: '1px solid var(--dsw-alias-border-l2)',
+      borderRadius: '999px',
+      background: 'var(--dsw-alias-bg-base)',
+      color: 'var(--dsw-alias-label-secondary)',
+      cursor: 'pointer',
+      whiteSpace: 'nowrap',
+      transition: 'opacity 120ms ease',
+    }
+    // 行级跳转指示（跳转中）：官方 loading 圆环 + 旋转动画，替换续写按钮位置。
+    const spinnerStyle: React.CSSProperties = {
+      flex: 'none',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      color: 'var(--dsw-alias-label-secondary)',
+      animation: 'dsh-trail-spin 0.9s linear infinite',
+    }
+    // 展开体（行下方兄弟）：只靠缩进区分层级，无卡片线框/背景
+    // （叶子行与左栏同底，hover 高亮即交互提示）。
+    const bodyWrapStyle: React.CSSProperties = {
+      marginLeft: 20,
+      padding: '2px 0',
+    }
+    // 分支行（展开体里的共享会话）：与节点行同款单行风格 ——
+    // 只展示叶子摘要（fork 标题多为「旧标题+数字后缀」无辨识度），
+    // 整行点击即跳转到该分支会话。
+    const branchRowStyle: React.CSSProperties = {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '2px 8px',
+      borderRadius: '6px',
+      marginBottom: '2px',
+      cursor: 'pointer',
     }
 
+    // 折叠态：面板收拢为 0 宽（无分割线），展开按钮以 Fragment 兄弟悬浮在
+    // header「«」的镜像位置（见 applyLayout 折叠分支）；展开态只渲染面板。
     return React.createElement(
-      'div',
-      {
-        ref: panelRef,
-        // 渲染宽度读 ref：拖拽中的直写值在任意重渲染（会话更新等）下保持，
-        // 不会被未提交的 prefs 拉回。
-        style: { ...panelStyle, width: collapsed ? LEFT_COLUMN_RAIL_WIDTH : widthRef.current },
-      },
-      collapsed
-        ? React.createElement(
-          'button',
-          {
-            type: 'button',
-            style: railButtonStyle,
-            title: '展开历史索引',
-            onClick: toggleCollapsed,
-            onPointerEnter: () => setRailHovered(true),
-            onPointerLeave: () => setRailHovered(false),
+      React.Fragment,
+      null,
+      React.createElement(
+        'div',
+        {
+          ref: panelRef,
+          // 渲染宽度读 ref：拖拽中的直写值在任意重渲染（会话更新等）下保持，
+          // 不会被未提交的 prefs 拉回。折叠时 0 宽 + 无 borderRight。
+          style: {
+            ...panelStyle,
+            width: collapsed ? 0 : widthRef.current,
+            borderRight: collapsed ? 'none' : '1px solid var(--dsw-alias-border-l1)',
           },
-          React.createElement('span', { style: railIconStyle }, '☰'),
-          React.createElement('span', { style: railTextStyle }, '历史'),
-        )
-        : React.createElement(
+        },
+        // 行级 loading 圆环的旋转动画（无 CSS 基建，静态注入一次）。
+        React.createElement('style', null, SPIN_CSS),
+        collapsed
+          ? null
+          : React.createElement(
           React.Fragment,
           null,
           React.createElement(
             'div',
             { style: headerStyle },
-            React.createElement('h2', { style: titleStyle }, 'History Index'),
-            React.createElement('span', { style: countStyle }, `${nodes.length} 个逻辑节点`),
             React.createElement(
-              'button',
-              {
-                type: 'button',
-                style: toggleButtonStyle,
-                title: '折叠左栏',
-                onClick: toggleCollapsed,
-              },
-              '«',
+              'div',
+              { style: titleRowStyle },
+              React.createElement('h2', { style: titleStyle }, 'History Index'),
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  style: toggleButtonStyle,
+                  title: '折叠左栏',
+                  onClick: toggleCollapsed,
+                },
+                '«',
+              ),
+            ),
+            React.createElement(
+              'div',
+              { style: countRowStyle },
+              React.createElement('span', { style: countStyle }, `${nodes.length} 个逻辑节点`),
             ),
           ),
           hint !== null
@@ -854,35 +1019,146 @@ function createLeftColumn(
                 { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
                 '暂无节点，等待第一条消息',
               )
-              : nodes.map((node) => React.createElement(
-                'div',
-                {
-                  key: node.nodeKey,
-                  style: rowStyle,
-                  title: node.text !== '' ? node.text : undefined,
-                  onClick: () => jumpToNode(node),
-                },
-                React.createElement(
-                  'span',
-                  { style: { color: 'var(--dsw-alias-brand-primary)', fontSize: '12px' } },
-                  KIND_ICONS[node.kind] ?? KIND_ICONS.other,
-                ),
-                React.createElement(
+              : nodes.map((node) => {
+                const nodeLineage = lineageForNode({
+                  currentSessionId: current as string,
+                  node,
+                  sessions: sessionsList,
+                  index: historyIndex,
+                })
+                const showBadge = nodeLineage.badge > 0
+                const isLineageOpen = lineageOpen[node.nodeKey] === true
+                const rowHovered = hoveredRow === node.nodeKey
+                const forkable = node.boundarySeq !== null
+                // 行首 leading：分叉数字（hover/展开时变官方 chevron，v 型下拉提示）。
+                const chevronEl = primitives.IconChevronDownOutline14 !== undefined
+                  ? React.createElement(primitives.IconChevronDownOutline14, { size: 14 })
+                  : React.createElement(
+                    'span',
+                    { style: { ...forkCountStyle, color: 'var(--dsw-alias-label-secondary)' } },
+                    '▾',
+                  )
+                return React.createElement(
                   'div',
-                  { style: { minWidth: 0, flex: 1 } },
+                  {
+                    key: node.nodeKey,
+                    // 行根 column（对齐官方 DisclosureRow）：标题行 + 展开体
+                    // 纵向堆叠；展开体是行的下方兄弟，行高恒定不被撑开。
+                    style: rowRootStyle,
+                  },
                   React.createElement(
                     'div',
-                    { style: rowSummaryStyle },
-                    node.summary !== '' ? node.summary : kindLabel(node.kind),
+                    {
+                      // 单行标题行（对齐官方 DisclosureRow 的 .row：24px 感），
+                      // hover 高亮背景（官方列表行同款 interactive-bg-hover）。
+                      style: {
+                        ...rowStyle,
+                        background: rowHovered
+                          ? 'var(--dsw-alias-interactive-bg-hover)'
+                          : 'transparent',
+                      },
+                      title: node.text !== '' ? node.text : undefined,
+                      onClick: () => jumpToNode(node),
+                      onPointerEnter: () => setHoveredRow(node.nodeKey),
+                      onPointerLeave: () => setHoveredRow((prev) => (prev === node.nodeKey ? null : prev)),
+                    },
+                    showBadge
+                      ? React.createElement(
+                        'button',
+                        {
+                          type: 'button',
+                          style: leadingButtonStyle,
+                          title: '查看共享该节点的分叉会话',
+                          'aria-expanded': isLineageOpen,
+                          onClick: (event: { stopPropagation: () => void }) => {
+                            event.stopPropagation()
+                            toggleLineage(node.nodeKey)
+                          },
+                        },
+                        rowHovered || isLineageOpen
+                          ? chevronEl
+                          : React.createElement(
+                            'span',
+                            { style: forkCountStyle },
+                            String(nodeLineage.badge),
+                          ),
+                      )
+                      : null,
+                    React.createElement(
+                      'span',
+                      { style: rowTitleStyle },
+                      node.summary !== '' ? node.summary : kindLabel(node.kind),
+                    ),
+                    React.createElement(
+                      'div',
+                      { style: rowActionsStyle },
+                      jumpingNodeKey === node.nodeKey
+                        // 跳转中：行尾显示官方 loading 圆环（缓冲反馈），
+                        // 结束后恢复续写按钮。
+                        ? React.createElement(
+                          'span',
+                          { style: spinnerStyle, title: '正在跳转到该节点…' },
+                          primitives.IconLoadingOutline16 !== undefined
+                            ? React.createElement(primitives.IconLoadingOutline16, { size: 14 })
+                            : React.createElement('span', { style: { fontSize: '12px' } }, '…'),
+                        )
+                        : forkable
+                          ? React.createElement(
+                            'button',
+                            {
+                              type: 'button',
+                              style: {
+                                ...forkButtonStyle,
+                                opacity: rowHovered ? 1 : 0,
+                                pointerEvents: rowHovered ? 'auto' : 'none',
+                              },
+                              title: '从该节点 fork 出新会话继续',
+                              onClick: (event: { stopPropagation: () => void }) => {
+                                event.stopPropagation()
+                                forkAt(node)
+                              },
+                            },
+                            '续写',
+                          )
+                          : null,
+                    ),
                   ),
-                  React.createElement(
-                    'div',
-                    { style: rowMetaStyle },
-                    `#${node.turn} · seq ${node.startSeq}–${node.endSeq}`
-                    + (node.boundarySeq === null ? ' · 进行中' : ' · 可续写'),
-                  ),
-                ),
-              )),
+                  isLineageOpen && nodeLineage.sharedSessions.length > 0
+                    ? React.createElement(
+                      'div',
+                      {
+                        style: bodyWrapStyle,
+                        onClick: (event: { stopPropagation: () => void }) => event.stopPropagation(),
+                      },
+                      nodeLineage.sharedSessions.map((shared) => {
+                        // 分支行内容 = 叶子摘要（该分支最后一个节点的摘要）；
+                        // fork 标题多为「旧标题+数字后缀」，不展示。
+                        const leaf = shared.nodes !== undefined && shared.nodes.length > 0
+                          ? shared.nodes[shared.nodes.length - 1].summary || kindLabel(shared.nodes[shared.nodes.length - 1].kind)
+                          : shared.sessionId
+                        const branchHovered = hoveredBranch === shared.sessionId
+                        return React.createElement(
+                          'div',
+                          {
+                            key: shared.sessionId,
+                            style: {
+                              ...branchRowStyle,
+                              background: branchHovered
+                                ? 'var(--dsw-alias-interactive-bg-hover)'
+                                : 'transparent',
+                            },
+                            title: `跳转到该分支：${leaf}`,
+                            onClick: () => { sessions?.open(shared.sessionId) },
+                            onPointerEnter: () => setHoveredBranch(shared.sessionId),
+                            onPointerLeave: () => setHoveredBranch((prev) => (prev === shared.sessionId ? null : prev)),
+                          },
+                          React.createElement('span', { style: rowTitleStyle }, leaf),
+                        )
+                      }),
+                    )
+                    : null,
+                )
+              }),
           ),
           // 拖宽手柄：指针捕获 + 直写宽度；双击复位默认宽。
           React.createElement(
@@ -901,6 +1177,22 @@ function createLeftColumn(
             React.createElement('div', { style: handlePillStyle }),
           ),
         ),
+      ),
+      collapsed
+        ? React.createElement(
+          'button',
+          {
+            ref: expandButtonRef,
+            type: 'button',
+            style: expandButtonStyle,
+            title: '展开历史索引',
+            onClick: toggleCollapsed,
+            onPointerEnter: () => setRailHovered(true),
+            onPointerLeave: () => setRailHovered(false),
+          },
+          '☰',
+        )
+        : null,
     )
   }
 }
@@ -912,6 +1204,10 @@ function createLeftColumn(
  */
 export default function factory(require: BundleRequire): PluginEntry {
   const React = require('react') as typeof import('react')
+  // 官方 primitives（浏览器模块表 external）：只复用官方 chevron 元素，
+  // 与官方 tool 行设计语言一致。缺失时（异常环境）降级为纯文本 ▾。
+  const primitives = (require('@deepseek-ai/dsh-client-ui-primitives')
+    ?? {}) as ClientPrimitives
 
   return {
     name: PLUGIN_NAME,
@@ -928,7 +1224,7 @@ export default function factory(require: BundleRequire): PluginEntry {
       // 真左栏：shell.overlay 浮动列 + 内容让位 + 拖宽/记忆 + 行内跳转。保留 tab 供对比。
       slots.inject('shell.overlay', () => slots.register(
         { name: 'shell.overlay', id: LEFT_COLUMN_ID, order: 10, label: '历史索引左栏' },
-        createLeftColumn(React, sessions, timer),
+        createLeftColumn(React, sessions, timer, primitives),
       ))
     },
   }

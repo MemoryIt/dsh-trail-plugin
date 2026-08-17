@@ -28,7 +28,8 @@ const result = await build({
   platform: 'browser',
   write: false,
   // 平台模块（模块表）保持 external；其余依赖全部内联。
-  external: ['react', '@deepseek-ai/cordis'],
+  // @deepseek-ai/dsh-client-ui-primitives：浏览器模块表条目（官方 chevron 元素）。
+  external: ['react', '@deepseek-ai/cordis', '@deepseek-ai/dsh-client-ui-primitives'],
   define: {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
   },
