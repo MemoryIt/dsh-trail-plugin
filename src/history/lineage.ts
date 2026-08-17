@@ -33,9 +33,6 @@ export interface NodeLineage {
   badge: number
 }
 
-/** 当前会话节点路径的谱系（index 与 currentNodes 对齐）。 */
-export type NodeLineageList = NodeLineage[]
-
 /** 会话索引。 */
 function indexById(sessions: readonly LineageSessionLike[]): Map<string, LineageSessionLike> {
   return new Map(sessions.map((session) => [session.sessionId, session]))
@@ -63,7 +60,8 @@ export function isDescendantOf(
 
 /**
  * 两段节点路径的共享前缀长度：逐位比对 boundarySeq（非 null 相等才算共享，
- * 遇 null 或不等即停）。
+ * 遇 null 或不等即停）。与节点中心索引（src/history/index.ts）等价的不变量
+ * 检验工具：索引按 (rootId, boundarySeq) 分组的结果应与此逐位比对一致。
  */
 export function sharedPrefixLength(
   left: readonly HistoryNodeEntry[],
@@ -77,31 +75,4 @@ export function sharedPrefixLength(
     index += 1
   }
   return index
-}
-
-/**
- * 派生当前会话节点路径的谱系。
- * @param currentSessionId - 当前激活会话。
- * @param currentNodes - 当前会话的节点路径（投影值）。
- * @param sessions - 会话列表（含 fork 父链与各会话投影）。
- */
-export function deriveNodeLineage(input: {
-  currentSessionId: string
-  currentNodes: readonly HistoryNodeEntry[]
-  sessions: readonly LineageSessionLike[]
-}): NodeLineageList {
-  const { currentSessionId, currentNodes, sessions } = input
-  const descendants = sessions.filter((session) => (
-    session.sessionId !== currentSessionId
-    && session.origin !== 'subagent'
-    && isDescendantOf(sessions, session.sessionId, currentSessionId)
-  ))
-
-  return currentNodes.map((_node, index) => {
-    const sharedSessions = descendants.filter((descendant) => {
-      const descendantNodes = descendant.nodes ?? []
-      return sharedPrefixLength(currentNodes, descendantNodes) > index
-    })
-    return { sharedSessions, badge: sharedSessions.length }
-  })
 }

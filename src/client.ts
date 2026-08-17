@@ -9,13 +9,15 @@
  * - M1~M3：host 投影单元折叠节点树 → 投影缓存 → useProjection('history')
  * - M4：谱系（角标/多叶子）纯 client 派生 —— 会话列表自带 fork 父链
  *   （parentId）与每会话的 history 投影值（projectionValues），
- *   见 src/history/lineage.ts，无需 host 改动。
+ *   节点中心索引（src/history/index.ts：rootId+boundarySeq → 会话集合）
+ *   做 O(1) 候选查询 + parentId 血缘门控，无需 host 改动。
  *
  * 交互：点击节点内联展开；角标（分叉数）点击展开一级下拉（共享会话 +
  * 叶子摘要 + 切换）；boundarySeq 非空的节点可「从这里续写」（sessions.fork）。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { deriveNodeLineage, type LineageSessionLike, type NodeLineageList } from './history/lineage.js'
+import { buildHistoryIndex, lineageForNode } from './history/index.js'
+import { type LineageSessionLike } from './history/lineage.js'
 import { kindLabel } from './history/text.js'
 import type { HistoryIndexState, HistoryNodeEntry } from './history/types.js'
 
@@ -101,11 +103,8 @@ function createHistoryView(
     const projection = props.useProjection('history') as HistoryIndexState | undefined
     const nodes = projection?.nodes ?? []
     const sessionListState = props.useSessions((s: unknown) => s) as SessionListStateLike | undefined
-    const lineage: NodeLineageList = deriveNodeLineage({
-      currentSessionId: props.sessionId,
-      currentNodes: nodes,
-      sessions: toLineageSessions(sessionListState),
-    })
+    const sessionsList = toLineageSessions(sessionListState)
+    const historyIndex = buildHistoryIndex(sessionsList)
     const [expanded, setExpanded] = React.useState<Record<string, boolean>>({})
     const [lineageOpen, setLineageOpen] = React.useState<Record<string, boolean>>({})
 
@@ -221,9 +220,14 @@ function createHistoryView(
             { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
             '暂无节点，等待第一条消息',
           )
-          : nodes.map((node, index) => {
+          : nodes.map((node) => {
             const isExpanded = expanded[node.nodeKey] === true
-            const nodeLineage = lineage[index]
+            const nodeLineage = lineageForNode({
+              currentSessionId: props.sessionId,
+              node,
+              sessions: sessionsList,
+              index: historyIndex,
+            })
             const showBadge = nodeLineage.badge > 0
             const isLineageOpen = lineageOpen[node.nodeKey] === true
             return React.createElement(

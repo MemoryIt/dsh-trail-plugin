@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  deriveNodeLineage,
   isDescendantOf,
   sharedPrefixLength,
   type LineageSessionLike,
@@ -24,18 +23,12 @@ function node(turn: number, boundarySeq: number | null): HistoryNodeEntry {
   }
 }
 
-function session(
-  sessionId: string,
-  parentId: string | undefined,
-  turns: number,
-  opts: { origin?: string; nodes?: readonly HistoryNodeEntry[] } = {},
-): LineageSessionLike {
+function session(sessionId: string, parentId: string | undefined, turns: number): LineageSessionLike {
   return {
     sessionId,
     parentId,
     displayTitle: `会话 ${sessionId}`,
-    origin: opts.origin,
-    nodes: opts.nodes ?? (turns > 0 ? Array.from({ length: turns }, (_, i) => node(i + 1, (i + 1) * 10)) : []),
+    nodes: turns > 0 ? Array.from({ length: turns }, (_, i) => node(i + 1, (i + 1) * 10)) : [],
   }
 }
 
@@ -78,78 +71,5 @@ describe('sharedPrefixLength', () => {
     const right = [node(1, 10), node(2, null)] // 第二个是进行中节点
     expect(sharedPrefixLength(left, right)).toBe(1)
     expect(sharedPrefixLength([], [node(1, 10)])).toBe(0)
-  })
-})
-
-describe('deriveNodeLineage', () => {
-  it('直系子会话：共享节点获得角标', () => {
-    // s-root 有 3 个节点；s-a 从 s-root 的第 2 个节点之后分叉（共享前 2 个）
-    const root = [node(1, 10), node(2, 20), node(3, 30)]
-    const childA = [node(1, 10), node(2, 20), node(4, 40)] // 第 3 个不同 → 共享前缀 2
-    const lineage = deriveNodeLineage({
-      currentSessionId: 's-root',
-      currentNodes: root,
-      sessions: [
-        session('s-root', undefined, 0, { nodes: root }),
-        session('s-a', 's-root', 0, { nodes: childA }),
-      ],
-    })
-    expect(lineage.map(l => l.badge)).toEqual([1, 1, 0])
-    expect(lineage[0].sharedSessions[0].sessionId).toBe('s-a')
-  })
-
-  it('多级 fork：孙会话对更高层节点贡献角标', () => {
-    const root = [node(1, 10), node(2, 20), node(3, 30)]
-    const childA = [node(1, 10), node(2, 20), node(4, 40)]
-    const grandB = [node(1, 10), node(2, 20), node(4, 40), node(5, 50)] // B 从 A 的节点 4 后分叉
-    const lineage = deriveNodeLineage({
-      currentSessionId: 's-root',
-      currentNodes: root,
-      sessions: [
-        session('s-root', undefined, 0, { nodes: root }),
-        session('s-a', 's-root', 0, { nodes: childA }),
-        session('s-b', 's-a', 0, { nodes: grandB }),
-      ],
-    })
-    // 根节点 1、2 被 A 和 B 共享；节点 3 无人共享
-    expect(lineage.map(l => l.badge)).toEqual([2, 2, 0])
-  })
-
-  it('子代理会话被排除', () => {
-    const root = [node(1, 10), node(2, 20)]
-    const child = [node(1, 10), node(2, 20), node(3, 30)]
-    const lineage = deriveNodeLineage({
-      currentSessionId: 's-root',
-      currentNodes: root,
-      sessions: [
-        session('s-root', undefined, 0, { nodes: root }),
-        session('s-a', 's-root', 0, { nodes: child }),
-        session('s-sub', 's-root', 0, { nodes: child, origin: 'subagent' }),
-      ],
-    })
-    expect(lineage[0].badge).toBe(1)
-    expect(lineage[0].sharedSessions.map(s => s.sessionId)).toEqual(['s-a'])
-  })
-
-  it('无投影值的后代不计入（无法对齐）', () => {
-    const root = [node(1, 10), node(2, 20)]
-    const lineage = deriveNodeLineage({
-      currentSessionId: 's-root',
-      currentNodes: root,
-      sessions: [
-        session('s-root', undefined, 0, { nodes: root }),
-        session('s-a', 's-root', 0, { nodes: undefined }), // 投影缺失
-      ],
-    })
-    expect(lineage.map(l => l.badge)).toEqual([0, 0])
-  })
-
-  it('空节点路径返回空谱系', () => {
-    const lineage = deriveNodeLineage({
-      currentSessionId: 's-root',
-      currentNodes: [],
-      sessions: [],
-    })
-    expect(lineage).toEqual([])
   })
 })
