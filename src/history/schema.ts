@@ -17,6 +17,8 @@ const historyNodeSchema = z.object({
   boundarySeq: z.number().int().nonnegative().nullable(),
   kind: historyNodeKindSchema as z.ZodType<HistoryNodeKind>,
   summary: z.string(),
+  summarySource: z.enum(['rule', 'llm']),
+  updatedAt: z.number().int().nonnegative(),
   text: z.string(),
   messageSeqs: z.array(z.number().int().nonnegative()),
 })

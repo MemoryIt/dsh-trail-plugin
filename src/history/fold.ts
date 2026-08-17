@@ -7,13 +7,16 @@
  * - state 是 plain JSON（持久化前置条件），不可变更新；
  * - 同一事件序列重放结果确定（幂等）。
  */
-import { appendBounded, extractText, mergeKind, truncate } from './text.js'
+import { appendBounded, extractText, mergeKind } from './text.js'
+import { ruleSummary } from './summarize.js'
 import type { HistoryIndexState, HistoryNodeEntry, HistoryNodeKind } from './types.js'
 
 /** 事件的最小结构（运行时来自 @deepseek-ai/dsh-session 的 SessionEvent 字段子集）。 */
 export interface LogEventLike {
   type: string
   seq: number
+  /** Unix epoch 毫秒。 */
+  time: number
   data: Record<string, unknown>
 }
 
@@ -61,6 +64,8 @@ function createNode(state: HistoryIndexState, turn: number, startSeq: number): H
     boundarySeq: null,
     kind: 'other',
     summary: '',
+    summarySource: 'rule',
+    updatedAt: 0,
     text: '',
     messageSeqs: [],
   }
@@ -95,11 +100,13 @@ export function foldHistoryIndex(state: HistoryIndexState, event: LogEventLike):
     case 'user/message': {
       const node = targetNode(state, undefined, event.seq)
       const text = extractText(event.data.content)
+      const summary = node.summary !== '' ? node.summary : ruleSummary(text, '')
       const next: HistoryNodeEntry = {
         ...node,
         endSeq: event.seq,
         kind: mergeKind(node.kind, 'user'),
-        summary: node.summary !== '' ? node.summary : truncate(text),
+        summary,
+        updatedAt: summary !== node.summary ? event.time : node.updatedAt,
         text: appendBounded(node.text, text),
         messageSeqs: [...node.messageSeqs, event.seq],
       }
@@ -109,11 +116,13 @@ export function foldHistoryIndex(state: HistoryIndexState, event: LogEventLike):
     case 'assistant/message': {
       const node = targetNode(state, Number(event.data.turn), event.seq)
       const text = extractText((event.data.message as Record<string, unknown> | undefined)?.content)
+      const summary = node.summary !== '' ? node.summary : ruleSummary('', text)
       const next: HistoryNodeEntry = {
         ...node,
         endSeq: event.seq,
         kind: mergeKind(node.kind, 'assistant'),
-        summary: node.summary !== '' ? node.summary : truncate(text),
+        summary,
+        updatedAt: summary !== node.summary ? event.time : node.updatedAt,
         text: appendBounded(node.text, text),
         messageSeqs: [...node.messageSeqs, event.seq],
       }

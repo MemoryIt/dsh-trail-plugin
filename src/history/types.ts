@@ -2,12 +2,13 @@
  * History Index 投影层的共享类型：host 侧折叠与 client 侧渲染共用。
  * 纯类型模块，无运行时依赖（client bundle 只以 type-only 引入）。
  */
+import type { SummarySource } from './summarize.js'
 
 /** 逻辑节点类型（决定左栏行图标）。 */
 export type HistoryNodeKind = 'user' | 'assistant' | 'mixed' | 'tool' | 'other'
 
 /**
- * 一个逻辑节点（设计文档 §5.1 / §5.3）。
+ * 一个逻辑节点（设计文档 §5.1 / §5.3 / §5.4）。
  * state 为 plain JSON，可持久化到投影缓存（session_projcache 存储域）。
  */
 export interface HistoryNodeEntry {
@@ -24,8 +25,12 @@ export interface HistoryNodeEntry {
   boundarySeq: number | null
   /** 节点类型（决定图标）。 */
   kind: HistoryNodeKind
-  /** 规则摘要（文本截断；M2 可升级 LLM 增强）。 */
+  /** 规则摘要（设计 §5.4 存储格式的 text 字段；LLM 增强后改 source）。 */
   summary: string
+  /** 摘要来源：'rule' | （未来）'llm'。 */
+  summarySource: SummarySource
+  /** 摘要最近一次生成的事件时间（epoch ms），供未来刷新判断。 */
+  updatedAt: number
   /** 内联查看用文本（有界截断；原文留在 session log，不重复存储）。 */
   text: string
   /** 本节点内的消息 seq（跳转定位用）。 */

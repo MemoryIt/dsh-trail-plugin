@@ -14,7 +14,7 @@ export type { Options }
 export const HISTORY_PROJECTION_KEY = 'history'
 
 /** 投影 state 版本：state 字段或折叠语义变化时递增（旧缓存行自动失效重算）。 */
-export const HISTORY_PROJECTION_STATE_VERSION = 1
+export const HISTORY_PROJECTION_STATE_VERSION = 2
 
 /** sessionProjections 服务的最小结构（官方类型来自 @deepseek-ai/dsh-session-projection）。 */
 interface ProjectionRegistryLike {
