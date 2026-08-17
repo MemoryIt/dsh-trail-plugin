@@ -20,6 +20,7 @@ function fakeReact(states: unknown[] = []) {
     useLayoutEffect: () => {},
     // 官方 primitives 桩（require('@deepseek-ai/dsh-client-ui-primitives') 的解构目标）。
     IconChevronDownOutline14: () => null,
+    IconLoadingOutline16: () => null,
   }
 }
 
@@ -394,6 +395,37 @@ describe('client bundle factory', () => {
     const branch = findElementByKey(rendered, 's-a')
     expect(branch).not.toBeNull()
     expect(branch?.props?.style?.background).toBe('var(--dsw-alias-interactive-bg-hover)')
+  })
+
+  it('跳转中：被点击节点的行尾显示官方 loading 圆环（缓冲指示）', () => {
+    const { registrations, ctx } = fakeCtx()
+    // 第五个 useState（jumpingNodeKey）注入 '1' → 行 1 跳转中
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }, {}, null, null, '1']))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector(leftColumnSessionsState()),
+    })
+    // 行尾出现跳转指示（官方 loading 圆环桩：fakeReact.createElement 记为
+    // {type: 函数, props: {size}})）
+    const spinner = findElementByTitle(rendered, '正在跳转到该节点…')
+    expect(spinner).not.toBeNull()
+    const icon = spinner?.children?.[0] as { type?: unknown; props?: Record<string, unknown> } | undefined
+    expect(icon?.type).toBeTypeOf('function')
+    expect(icon?.props?.size).toBe(14)
+    // 跳转中的行不再显示续写按钮（但其他行的续写按钮仍在）
+    expect(findByText(rendered, '续写')).not.toBeNull()
+  })
+
+  it('未跳转时不显示跳转指示', () => {
+    const { registrations, ctx } = fakeCtx()
+    const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }]))
+    plugin.apply(ctx as never)
+    const overlay = registrations.find(r => r.key === 'shell.overlay')
+    const rendered = overlay?.effect.component({
+      useSessions: (selector) => selector(leftColumnSessionsState()),
+    })
+    expect(findElementByTitle(rendered, '正在跳转到该节点…')).toBeNull()
   })
 
   it('行首分叉数字 hover 时变 chevron（v 型下拉提示）', () => {

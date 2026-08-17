@@ -69,12 +69,16 @@ interface ClientTimer {
 
 /**
  * 官方 primitives（`@deepseek-ai/dsh-client-ui-primitives`，浏览器模块表
- * external）的最小结构：本轮只复用官方 chevron 元素（tool 行同款），
- * 颜色随 currentColor。模块表不含时（理论降级）返回 undefined 由调用方兜底。
+ * external）的最小结构：复用官方 chevron（分叉展开）与 loading 圆环
+ * （跳转指示），颜色随 currentColor。模块表不含时（理论降级）由调用方兜底。
  */
 interface ClientPrimitives {
   IconChevronDownOutline14?: ComponentType<{ size?: number; className?: string }>
+  IconLoadingOutline16?: ComponentType<{ size?: number; className?: string }>
 }
+
+/** 行级 loading 圆环的旋转动画（无 CSS 基建，一次性注入 style 标签）。 */
+const SPIN_CSS = '@keyframes dsh-trail-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }'
 
 /** cordis 插件入口（client 侧）。 */
 interface PluginEntry {
@@ -442,6 +446,8 @@ function createLeftColumn(
     const [hoveredRow, setHoveredRow] = React.useState<string | null>(null)
     // 分支行 hover 态（展开体里分支列表的 hover 高亮，按 sessionId）。
     const [hoveredBranch, setHoveredBranch] = React.useState<string | null>(null)
+    // 跳转中指示（行级）：正在翻页/等待渲染的节点 key，结束自动清除。
+    const [jumpingNodeKey, setJumpingNodeKey] = React.useState<string | null>(null)
     const widthRef = React.useRef(prefs.width)
     const draggingRef = React.useRef(false)
     const dragStartRef = React.useRef({ x: 0, width: 0, available: 0 })
@@ -509,6 +515,13 @@ function createLeftColumn(
       }
       const gen = jumpGenRef.current + 1
       jumpGenRef.current = gen
+      // 行级跳转指示：翻页/等待渲染期间给用户缓冲反馈（最新一次跳转接管）。
+      setJumpingNodeKey(node.nodeKey)
+      // 结束路径统一清除：仅最新跳转（gen 未失效）负责清除，被覆盖时
+      // 由新跳转接管（避免旧跳转闪掉新指示）。
+      const finishJump = (): void => {
+        if (gen === jumpGenRef.current) setJumpingNodeKey(null)
+      }
       void (async () => {
         // 快照 → 候选列表（turn/seq 对齐映射）
         const readCandidates = (): JumpChatNodeLike[] | null => {
@@ -545,6 +558,7 @@ function createLeftColumn(
         const key = await resolveWithPaging()
         if (gen !== jumpGenRef.current) return
         if (key === null) {
+          finishJump()
           showHint('目标节点未加载或不存在')
           return
         }
@@ -559,9 +573,11 @@ function createLeftColumn(
         }
         if (gen !== jumpGenRef.current) return
         if (row === null) {
+          finishJump()
           showHint('聊天视图未激活，请先切到聊天')
           return
         }
+        finishJump()
         row.scrollIntoView({ block: 'start' })
       })()
     }
@@ -888,8 +904,15 @@ function createLeftColumn(
       whiteSpace: 'nowrap',
       transition: 'opacity 120ms ease',
     }
-    // 展开体（行下方兄弟）：相对本历史消息左缩进，与官方展开体同款
-    // 卡片语言（border-l1 + radius + 独立背景）。
+    // 行级跳转指示（跳转中）：官方 loading 圆环 + 旋转动画，替换续写按钮位置。
+    const spinnerStyle: React.CSSProperties = {
+      flex: 'none',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      color: 'var(--dsw-alias-label-secondary)',
+      animation: 'dsh-trail-spin 0.9s linear infinite',
+    }
     // 展开体（行下方兄弟）：只靠缩进区分层级，无卡片线框/背景
     // （叶子行与左栏同底，hover 高亮即交互提示）。
     const bodyWrapStyle: React.CSSProperties = {
@@ -917,6 +940,8 @@ function createLeftColumn(
         // 不会被未提交的 prefs 拉回。
         style: { ...panelStyle, width: collapsed ? LEFT_COLUMN_RAIL_WIDTH : widthRef.current },
       },
+      // 行级 loading 圆环的旋转动画（无 CSS 基建，静态注入一次）。
+      React.createElement('style', null, SPIN_CSS),
       collapsed
         ? React.createElement(
           'button',
@@ -1035,25 +1060,35 @@ function createLeftColumn(
                     React.createElement(
                       'div',
                       { style: rowActionsStyle },
-                      forkable
+                      jumpingNodeKey === node.nodeKey
+                        // 跳转中：行尾显示官方 loading 圆环（缓冲反馈），
+                        // 结束后恢复续写按钮。
                         ? React.createElement(
-                          'button',
-                          {
-                            type: 'button',
-                            style: {
-                              ...forkButtonStyle,
-                              opacity: rowHovered ? 1 : 0,
-                              pointerEvents: rowHovered ? 'auto' : 'none',
-                            },
-                            title: '从该节点 fork 出新会话继续',
-                            onClick: (event: { stopPropagation: () => void }) => {
-                              event.stopPropagation()
-                              forkAt(node)
-                            },
-                          },
-                          '续写',
+                          'span',
+                          { style: spinnerStyle, title: '正在跳转到该节点…' },
+                          primitives.IconLoadingOutline16 !== undefined
+                            ? React.createElement(primitives.IconLoadingOutline16, { size: 14 })
+                            : React.createElement('span', { style: { fontSize: '12px' } }, '…'),
                         )
-                        : null,
+                        : forkable
+                          ? React.createElement(
+                            'button',
+                            {
+                              type: 'button',
+                              style: {
+                                ...forkButtonStyle,
+                                opacity: rowHovered ? 1 : 0,
+                                pointerEvents: rowHovered ? 'auto' : 'none',
+                              },
+                              title: '从该节点 fork 出新会话继续',
+                              onClick: (event: { stopPropagation: () => void }) => {
+                                event.stopPropagation()
+                                forkAt(node)
+                              },
+                            },
+                            '续写',
+                          )
+                          : null,
                     ),
                   ),
                   isLineageOpen && nodeLineage.sharedSessions.length > 0
