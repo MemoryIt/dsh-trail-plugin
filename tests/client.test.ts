@@ -264,6 +264,10 @@ describe('client bundle factory', () => {
     expect(text).toContain('History Index')
     expect(text).toContain('2 个逻辑节点')
     expect(text).toContain('帮我写个插件')
+    // 展开态 header 渲染折叠按钮（左半圆 <-，title「折叠左栏」），无展开按钮（->）
+    expect(text).toContain('折叠左栏')
+    expect(text).toContain('<-')
+    expect(text).not.toContain('->')
     // 单行标题：无 meta 行（#turn · seq · 可续写）与无 kind emoji
     expect(text).not.toContain('可续写')
     expect(text).not.toContain('seq ')
@@ -289,7 +293,7 @@ describe('client bundle factory', () => {
     })
     const text = JSON.stringify(rendered)
     expect(text).toContain('展开历史索引')
-    expect(text).toContain('☰')
+    expect(text).toContain('->')
     // 折叠态结构：Fragment = [面板(0 宽, 无 borderRight), 展开按钮]
     const children = Array.isArray(rendered?.children) ? rendered?.children : [rendered?.children]
     expect(children).toHaveLength(2)

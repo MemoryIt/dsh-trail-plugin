@@ -455,7 +455,8 @@ function createLeftColumn(
     const expandButtonRef = React.useRef<HTMLButtonElement | null>(null)
     const convRootRef = React.useRef<HTMLElement | null>(null)
     const [handleHovered, setHandleHovered] = React.useState(false)
-    // 折叠竖条悬停态（可发现性：竖条本身太窄，hover 高亮提示可展开）。
+    // 折叠/展开按钮共用 hover 态（半圆高亮 + 可发现性；两按钮互斥出现，
+    // 折叠态 = 展开按钮 ->，展开态 = 折叠按钮 <-）。
     const [railHovered, setRailHovered] = React.useState(false)
     // 拖拽中状态（仅起止各一次 setState；拖动中宽度直写 DOM 不触发重渲染）。
     const [dragging, setDragging] = React.useState(false)
@@ -633,15 +634,15 @@ function createLeftColumn(
           panel.style.width = `${expanded}px`
           convRoot.style.paddingLeft = collapsed ? '' : `${expanded}px`
         }
-        // 折叠态：展开按钮与 header「«」关于分割线镜像对称——
-        // 分割线虚拟位置 = 面板左缘 + 记忆宽度；按钮在分割线另一侧
-        // EXPAND_BUTTON_DIVIDER_GAP 处，垂直中心 = titleRow 中心。
+        // 折叠态：展开按钮（右半圆 ->）直径边（左缘）贴对话区内容左缘
+        // （gap 0，落在官方 header 左 padding 区内），不再锚定记忆宽度的
+        // 虚拟分割线；垂直中心 = titleRow 中心（style 的 translateY(-50%)
+        // 负责定心，这里只给 top）。
         if (collapsed) {
           const button = expandButtonRef.current
           if (button !== null) {
-            const dividerX = convRect.left - frameRect.left + widthRef.current
-            button.style.left = `${dividerX + EXPAND_BUTTON_DIVIDER_GAP}px`
-            button.style.top = `${convRect.top - frameRect.top + EXPAND_BUTTON_CENTER_Y - 10}px`
+            button.style.left = `${convRect.left - frameRect.left + EXPAND_BUTTON_DIVIDER_GAP}px`
+            button.style.top = `${convRect.top - frameRect.top + EXPAND_BUTTON_CENTER_Y}px`
           }
         }
       }
@@ -753,27 +754,41 @@ function createLeftColumn(
       borderRight: '1px solid var(--dsw-alias-border-l1)',
       boxSizing: 'border-box',
     }
-    // 折叠态展开按钮：参考 header 的「«」折叠按钮（同款尺寸/配色 + hover
-    // 高亮），与展开态的折叠按钮关于「左栏/对话区」分割线镜像对称——
-    // 高度中心 = header titleRow 中心（convRoot 顶 + 28），距分割线 = header
-    // 右 padding 12。位置由 applyLayout 折叠分支实时计算（frame 坐标系）。
+    // 折叠/展开按钮半圆几何常量：
+    // - RADIUS：半圆半径，按钮尺寸 2r × 2r（两按钮同尺寸同高；r=10 → 20×20，
+    //   折叠态右半圆恰好落在官方对话区 header 左 padding 20px 区内，不压标题）；
+    // - CENTER_Y：垂直中心 = header titleRow 中心 y（padding-top 12 + 32/2 = 28）；
+    // - DIVIDER_GAP：直径边距内容左缘距离（gap 0 紧贴；两按钮各自贴自己的
+    //   边缘——折叠态贴对话区左缘、展开态贴面板右缘，同半径同 gap 视觉
+    //   语言对称，面板折叠到 0 宽时两半圆位置重合拼成一个整圆）。
+    const EXPAND_BUTTON_RADIUS = 10
+    const EXPAND_BUTTON_CENTER_Y = 28
+    const EXPAND_BUTTON_DIVIDER_GAP = 0
+    // 折叠态展开按钮（右半圆包裹 ->）：直径边（左缘）贴对话区内容左缘
+    // （gap 0，落在官方 header 左 padding 20px 区内），弧朝右凸入对话区；
+    // 与展开态的折叠按钮（左半圆包裹 <-）同半径同 gap，直径边都对着内容
+    // 左缘、弧朝外——视觉上拼成一个整圆。垂直中心 = titleRow 中心
+    // （CENTER_Y），translateY(-50%) 精确定心。位置由 applyLayout 折叠分支
+    // 实时计算（frame 坐标系）。
     const expandButtonStyle: React.CSSProperties = {
       position: 'absolute',
       zIndex: 2,
-      padding: '2px 6px',
+      width: EXPAND_BUTTON_RADIUS * 2,
+      height: EXPAND_BUTTON_RADIUS * 2,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 0,
       border: 'none',
-      borderRadius: '6px',
-      background: railHovered ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent',
+      borderRadius: `0 ${EXPAND_BUTTON_RADIUS}px ${EXPAND_BUTTON_RADIUS}px 0`,
+      background: railHovered ? 'var(--dsw-alias-interactive-bg-hover)' : 'var(--dsw-alias-bg-layer-1)',
       color: 'var(--dsw-alias-label-secondary)',
-      fontSize: '14px',
-      lineHeight: '16px',
+      fontSize: '12px',
+      lineHeight: 1,
       cursor: 'pointer',
+      transform: 'translateY(-50%)',
       transition: 'background 120ms ease',
     }
-    // 展开按钮几何：与「«」对称所需的高度常量（titleRow 中心 y = 12 + 16）。
-    const EXPAND_BUTTON_CENTER_Y = 28
-    // 与「«」关于分割线的镜像距离 = header 右 padding 12px。
-    const EXPAND_BUTTON_DIVIDER_GAP = 12
     // 拖宽手柄：面板右缘 8px 命中条（仿 AppFrame 手柄；展开态渲染）。
     const handleStyle: React.CSSProperties = {
       position: 'absolute',
@@ -808,7 +823,9 @@ function createLeftColumn(
       display: 'flex',
       flexDirection: 'column',
       boxSizing: 'border-box',
-      padding: '12px 12px 0',
+      // 右 padding 0（= EXPAND_BUTTON_DIVIDER_GAP）：折叠按钮（左半圆 <-）
+      // 直径边贴面板右缘，与展开按钮（右半圆 ->）同半径同 gap、拼成一个整圆。
+      padding: '12px 0 0',
       minHeight: 75,
       borderBottom: '1px solid var(--dsw-alias-border-l2)',
     }
@@ -838,14 +855,29 @@ function createLeftColumn(
       fontWeight: 500,
       color: 'var(--dsw-alias-label-tertiary)',
     }
+    // 展开态折叠按钮（左半圆包裹 <-）：直径边（右缘）贴面板右缘（header
+    // 右 padding 0 = gap 0），弧朝左凸入面板；与折叠态的展开按钮（右半圆
+    // ->）同半径同 gap、直径边都对着内容左缘、弧朝外——拼成一个整圆。
+    // 垂直中心 = titleRow 中心（alignItems center）。zIndex 3 盖过拖拽手柄
+    // （zIndex 2，面板右缘 8px 命中条），按钮区域点击归折叠而非拖拽。
+    // hover 高亮勾勒半圆 + title 功能描述（两按钮互斥出现，共用 railHovered）。
     const toggleButtonStyle: React.CSSProperties = {
       flex: 'none',
-      padding: '2px 6px',
+      zIndex: 3,
+      width: EXPAND_BUTTON_RADIUS * 2,
+      height: EXPAND_BUTTON_RADIUS * 2,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 0,
       border: 'none',
-      background: 'transparent',
+      borderRadius: `${EXPAND_BUTTON_RADIUS}px 0 0 ${EXPAND_BUTTON_RADIUS}px`,
+      background: railHovered ? 'var(--dsw-alias-interactive-bg-hover)' : 'var(--dsw-alias-bg-layer-1)',
       color: 'var(--dsw-alias-label-secondary)',
-      fontSize: '14px',
+      fontSize: '12px',
+      lineHeight: 1,
       cursor: 'pointer',
+      transition: 'background 120ms ease',
     }
     const listStyle: React.CSSProperties = {
       flex: 1,
@@ -959,8 +991,9 @@ function createLeftColumn(
       cursor: 'pointer',
     }
 
-    // 折叠态：面板收拢为 0 宽（无分割线），展开按钮以 Fragment 兄弟悬浮在
-    // header「«」的镜像位置（见 applyLayout 折叠分支）；展开态只渲染面板。
+    // 折叠态：面板收拢为 0 宽（无分割线），展开按钮（右半圆 ->）以 Fragment
+    // 兄弟悬浮、直径边贴对话区左缘（见 applyLayout 折叠分支）；展开态只渲染
+    // 面板（header 内折叠按钮 <- 直径边贴面板右缘，两半圆拼合即一个整圆）。
     return React.createElement(
       React.Fragment,
       null,
@@ -997,8 +1030,10 @@ function createLeftColumn(
                   style: toggleButtonStyle,
                   title: '折叠左栏',
                   onClick: toggleCollapsed,
+                  onPointerEnter: () => setRailHovered(true),
+                  onPointerLeave: () => setRailHovered(false),
                 },
-                '«',
+                '<-',
               ),
             ),
             React.createElement(
@@ -1190,7 +1225,7 @@ function createLeftColumn(
             onPointerEnter: () => setRailHovered(true),
             onPointerLeave: () => setRailHovered(false),
           },
-          '☰',
+          '->',
         )
         : null,
     )
