@@ -20,6 +20,7 @@ import { buildHistoryIndex, lineageForNode } from './history/index.js'
 import { type LineageSessionLike } from './history/lineage.js'
 import { kindLabel } from './history/text.js'
 import type { HistoryIndexState, HistoryNodeEntry } from './history/types.js'
+import { resolveJumpTarget, type JumpChatNodeLike, type JumpChatNodeRawLike } from './jump.js'
 import {
   LEFT_COLUMN_DEFAULT_WIDTH, LEFT_COLUMN_MAX_WIDTH, LEFT_COLUMN_MIN_WIDTH, LEFT_COLUMN_RAIL_WIDTH,
   clampColumnWidth, readLeftColumnPrefs, writeLeftColumnPrefs,
@@ -39,6 +40,23 @@ interface ClientSlots {
 interface ClientSessions {
   fork(opts: { sessionId: string; atSeq?: number; increaseTitle?: boolean }): Promise<string>
   open(id: string): void
+  /** 会话绑定（session 面 = 会话快照可观察源，跳转映射用）。 */
+  binding(id: string): { session: SessionFaceLike } | undefined
+}
+
+/** 会话快照的最小结构（跳转映射用：chat.nodes.values()）。 */
+interface ConversationSnapshotLike {
+  chat?: { nodes?: { values(): readonly JumpChatNodeRawLike[] } }
+}
+
+/** SessionBinding.session 的最小结构（ObservableSnapshot<ConversationSnapshot>）。 */
+interface SessionFaceLike {
+  getSnapshot(): ConversationSnapshotLike
+}
+
+/** client timer 服务最小结构（瞬态提示自动消失用）。 */
+interface ClientTimer {
+  timeout(callback: () => void, delay: number): () => void
 }
 
 /** cordis 插件入口（client 侧）。 */
@@ -367,7 +385,11 @@ interface LeftColumnProps {
  * 数据：root scope 标准 kit 的 useSessions —— 当前会话（s.current）+ 会话行
  * 的 projectionValues.history（与 tab 同一条数据通路，重启恢复）。
  */
-function createLeftColumn(React: typeof import('react')) {
+function createLeftColumn(
+  React: typeof import('react'),
+  sessions: ClientSessions | undefined,
+  timer: ClientTimer | undefined,
+) {
   return function LeftColumn(props: LeftColumnProps): ReturnType<typeof React.createElement> | null {
     const current = props.useSessions((s: unknown) => {
       const state = s as SessionListStateLike | undefined
@@ -391,6 +413,15 @@ function createLeftColumn(React: typeof import('react')) {
     const [handleHovered, setHandleHovered] = React.useState(false)
     // 拖拽中状态（仅起止各一次 setState；拖动中宽度直写 DOM 不触发重渲染）。
     const [dragging, setDragging] = React.useState(false)
+    // 瞬态提示（跳转失败原因），1.6s 后自动消失。
+    const [hint, setHint] = React.useState<string | null>(null)
+    const hintTimerRef = React.useRef<(() => void) | null>(null)
+
+    const showHint = (message: string): void => {
+      setHint(message)
+      hintTimerRef.current?.()
+      hintTimerRef.current = timer === undefined ? null : timer.timeout(() => setHint(null), 1600)
+    }
 
     const commitPrefs = (next: LeftColumnPrefs): void => {
       setPrefs(next)
@@ -398,6 +429,44 @@ function createLeftColumn(React: typeof import('react')) {
     }
     const toggleCollapsed = (): void => {
       commitPrefs({ width: widthRef.current, collapsed: !collapsed })
+    }
+
+    // 行内跳转：历史节点 → 会话快照（点击时读取，无需订阅）→ 聊天节点 key
+    // → 官方行锚点 data-chat-anchor-key → scrollIntoView（滚动口是官方
+    // [data-conversation-scroll]）。失败给瞬态提示，不做任何写操作。
+    const jumpToNode = (node: HistoryNodeEntry): void => {
+      if (sessions === undefined || current === undefined) return
+      const snapshot = sessions.binding(current)?.session?.getSnapshot()
+      const chatNodes = snapshot?.chat?.nodes
+      if (chatNodes === undefined) {
+        showHint('聊天视图未激活，请先切到聊天')
+        return
+      }
+      const candidates: JumpChatNodeLike[] = chatNodes.values().map((n) => ({
+        key: n.key,
+        anchorSeq: n.anchorSeq,
+        turn: n.location?.kind === 'turn' || n.location?.kind === 'step'
+          ? n.location.turn?.turn ?? -1
+          : -1,
+      }))
+      const key = resolveJumpTarget(node, candidates)
+      if (key === null) {
+        showHint('目标节点未加载（超出已加载窗口）')
+        return
+      }
+      const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-chat-anchor-key]'))
+      let row: HTMLElement | null = null
+      for (const candidate of rows) {
+        if (candidate.dataset.chatAnchorKey === key) {
+          row = candidate
+          break
+        }
+      }
+      if (row === null) {
+        showHint('聊天视图未激活，请先切到聊天')
+        return
+      }
+      row.scrollIntoView({ block: 'start' })
     }
 
     // 几何 + 让位（layout effect：首帧前定位，避免面板闪现到 (0,0)）。
@@ -441,6 +510,7 @@ function createLeftColumn(React: typeof import('react')) {
         window.removeEventListener('resize', applyLayout)
         convRootRef.current = null
         convRoot.style.removeProperty('padding-left')
+        hintTimerRef.current?.()
       }
     }, [visible, collapsed])
 
@@ -585,6 +655,14 @@ function createLeftColumn(React: typeof import('react')) {
       padding: '7px 8px',
       borderRadius: '6px',
       marginBottom: '2px',
+      cursor: 'pointer',
+    }
+    const hintStyle: React.CSSProperties = {
+      padding: '6px 12px',
+      fontSize: '11px',
+      color: 'var(--dsw-alias-label-secondary)',
+      background: 'var(--dsw-alias-bg-base)',
+      borderBottom: '1px solid var(--dsw-alias-border-l1)',
     }
     const rowSummaryStyle: React.CSSProperties = {
       fontSize: '12px',
@@ -637,6 +715,9 @@ function createLeftColumn(React: typeof import('react')) {
               '«',
             ),
           ),
+          hint !== null
+            ? React.createElement('div', { style: hintStyle }, hint)
+            : null,
           React.createElement(
             'div',
             { style: listStyle },
@@ -648,7 +729,12 @@ function createLeftColumn(React: typeof import('react')) {
               )
               : nodes.map((node) => React.createElement(
                 'div',
-                { key: node.nodeKey, style: rowStyle },
+                {
+                  key: node.nodeKey,
+                  style: rowStyle,
+                  title: node.text !== '' ? node.text : undefined,
+                  onClick: () => jumpToNode(node),
+                },
                 React.createElement(
                   'span',
                   { style: { color: 'var(--dsw-alias-brand-primary)', fontSize: '12px' } },
@@ -706,15 +792,16 @@ export default function factory(require: BundleRequire): PluginEntry {
       const slots = ctx.get('slots') as ClientSlots | undefined
       if (slots === undefined) return
       const sessions = ctx.get('sessions', false) as ClientSessions | undefined
+      const timer = ctx.get('timer', false) as ClientTimer | undefined
       slots.inject('conversation.view', () => slots.register(
         { name: 'conversation.view', id: VIEW_ID, order: 20, label: '历史索引' },
         createHistoryView(React, sessions),
       ))
 
-      // 真左栏（Spike）：shell.overlay 浮动列 + 会话列内容让位。保留 tab 供对比。
+      // 真左栏：shell.overlay 浮动列 + 内容让位 + 拖宽/记忆 + 行内跳转。保留 tab 供对比。
       slots.inject('shell.overlay', () => slots.register(
         { name: 'shell.overlay', id: LEFT_COLUMN_ID, order: 10, label: '历史索引左栏' },
-        createLeftColumn(React),
+        createLeftColumn(React, sessions, timer),
       ))
     },
   }

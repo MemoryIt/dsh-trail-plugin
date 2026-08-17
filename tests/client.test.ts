@@ -94,6 +94,28 @@ function fakeSessionsState() {
   }
 }
 
+/** 递归查找渲染树中带指定 key prop 的元素 props（行节点 key = nodeKey）。
+ * 渲染树里 createElement 的 children 可能嵌套数组（如 nodes.map(...) 作为
+ * 单个 child 传入），需显式展开数组层。 */
+function findByKey(node: unknown, key: string): Record<string, unknown> | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findByKey(child, key)
+      if (found !== null) return found
+    }
+    return null
+  }
+  if (node === null || typeof node !== 'object') return null
+  const element = node as { props?: Record<string, unknown>; children?: unknown }
+  if (element.props?.key === key) return element.props
+  const children = Array.isArray(element.children) ? element.children : [element.children]
+  for (const child of children) {
+    const found = findByKey(child, key)
+    if (found !== null) return found
+  }
+  return null
+}
+
 describe('client bundle factory', () => {
   it('返回带 name 与 apply 的插件入口', () => {
     const plugin = factory(() => fakeReact())
@@ -149,6 +171,10 @@ describe('client bundle factory', () => {
     expect(text).toContain('2 个逻辑节点')
     expect(text).toContain('帮我写个插件')
     expect(text).toContain('可续写')
+    // 节点行带点击跳转回调（行 key = nodeKey）
+    const rowProps = findByKey(rendered, '1')
+    expect(rowProps).not.toBeNull()
+    expect(typeof rowProps?.onClick).toBe('function')
   })
 
   it('左栏在无当前会话或空会话时隐藏', () => {
