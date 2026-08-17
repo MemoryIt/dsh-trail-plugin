@@ -5,14 +5,17 @@
  * `scripts/build-client.mjs`（esbuild）再把它打成 DSH 浏览器模块加载器 handoff
  * （`window.__ModuleLoader__.load({ id, factory })`），覆盖写回 lib/client.js。
  *
- * M1 数据链路（官方投影通道，全历史无窗口限制）：
- *   host 投影单元（src/history/fold.ts）把 SessionEvent 折叠为节点树
- *     → 官方投影缓存持久化（$DSH_HOME/storages/session_projcache.json）
- *     → client useProjection('history') 读取完整索引
- * 交互：点击节点内联展开查看；boundarySeq 非空的节点提供「从此处续写」
- * （官方 sessions.fork → sessions.open）。
+ * 数据链路：
+ * - M1~M3：host 投影单元折叠节点树 → 投影缓存 → useProjection('history')
+ * - M4：谱系（角标/多叶子）纯 client 派生 —— 会话列表自带 fork 父链
+ *   （parentId）与每会话的 history 投影值（projectionValues），
+ *   见 src/history/lineage.ts，无需 host 改动。
+ *
+ * 交互：点击节点内联展开；角标（分叉数）点击展开一级下拉（共享会话 +
+ * 叶子摘要 + 切换）；boundarySeq 非空的节点可「从这里续写」（sessions.fork）。
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { deriveNodeLineage, type LineageSessionLike, type NodeLineageList } from './history/lineage.js'
 import { kindLabel } from './history/text.js'
 import type { HistoryIndexState, HistoryNodeEntry } from './history/types.js'
 
@@ -47,6 +50,22 @@ const VIEW_ID = 'history'
 interface HistoryViewProps {
   sessionId: string
   useProjection: (key: string) => unknown
+  useSessions: (selector: (state: unknown) => unknown) => unknown
+}
+
+/** SessionSummary 的最小结构（官方类型字段子集）。 */
+interface SessionSummaryLike {
+  id: string
+  displayTitle?: string
+  parentId?: string
+  origin?: string
+  projectionValues?: Record<string, unknown>
+}
+
+/** 会话列表 state 的最小结构。 */
+interface SessionListStateLike {
+  ids: string[]
+  byId: Record<string, SessionSummaryLike>
 }
 
 const KIND_ICONS: Record<string, string> = {
@@ -57,7 +76,23 @@ const KIND_ICONS: Record<string, string> = {
   other: '·',
 }
 
-/** 视图组件工厂：History Index（投影数据 + 内联展开 + fork 续写）。 */
+/** 把会话列表映射为谱系输入（携带 displayTitle 供下拉展示）。 */
+function toLineageSessions(state: SessionListStateLike | undefined): LineageSessionLike[] {
+  if (state === undefined) return []
+  return state.ids.map((id) => {
+    const summary = state.byId[id]
+    const history = summary?.projectionValues?.history as HistoryIndexState | undefined
+    return {
+      sessionId: id,
+      parentId: summary?.parentId,
+      origin: summary?.origin,
+      displayTitle: summary?.displayTitle ?? id,
+      nodes: history?.nodes,
+    }
+  })
+}
+
+/** 视图组件工厂：History Index（投影数据 + 谱系角标 + 内联展开 + fork 续写）。 */
 function createHistoryView(
   React: typeof import('react'),
   sessions: ClientSessions | undefined,
@@ -65,10 +100,20 @@ function createHistoryView(
   return function HistoryView(props: HistoryViewProps): ReturnType<typeof React.createElement> {
     const projection = props.useProjection('history') as HistoryIndexState | undefined
     const nodes = projection?.nodes ?? []
+    const sessionListState = props.useSessions((s: unknown) => s) as SessionListStateLike | undefined
+    const lineage: NodeLineageList = deriveNodeLineage({
+      currentSessionId: props.sessionId,
+      currentNodes: nodes,
+      sessions: toLineageSessions(sessionListState),
+    })
     const [expanded, setExpanded] = React.useState<Record<string, boolean>>({})
+    const [lineageOpen, setLineageOpen] = React.useState<Record<string, boolean>>({})
 
     const toggle = (nodeKey: string) => {
       setExpanded((prev) => ({ ...prev, [nodeKey]: !prev[nodeKey] }))
+    }
+    const toggleLineage = (nodeKey: string) => {
+      setLineageOpen((prev) => ({ ...prev, [nodeKey]: !prev[nodeKey] }))
     }
     const forkAt = (node: HistoryNodeEntry) => {
       if (sessions === undefined || node.boundarySeq === null) return
@@ -107,6 +152,15 @@ function createHistoryView(
       fontSize: '11px',
       color: 'var(--dsw-alias-label-secondary)',
     }
+    const badgeStyle: React.CSSProperties = {
+      padding: '1px 8px',
+      fontSize: '11px',
+      borderRadius: '10px',
+      border: '1px solid var(--dsw-alias-border-l2)',
+      color: 'var(--dsw-alias-brand-primary)',
+      cursor: 'pointer',
+      whiteSpace: 'nowrap',
+    }
     const expandedTextStyle: React.CSSProperties = {
       marginTop: '8px',
       padding: '8px 10px',
@@ -118,6 +172,21 @@ function createHistoryView(
       background: 'var(--dsw-alias-bg-layer-1)',
       borderRadius: '6px',
       border: '1px solid var(--dsw-alias-border-l1)',
+    }
+    const dropdownStyle: React.CSSProperties = {
+      marginTop: '8px',
+      padding: '6px',
+      borderRadius: '6px',
+      border: '1px solid var(--dsw-alias-border-l1)',
+      background: 'var(--dsw-alias-bg-layer-1)',
+    }
+    const dropdownRowStyle: React.CSSProperties = {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '6px 8px',
+      borderRadius: '4px',
+      cursor: 'pointer',
     }
     const forkButtonStyle: React.CSSProperties = {
       marginTop: '8px',
@@ -152,8 +221,11 @@ function createHistoryView(
             { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
             '暂无节点，等待第一条消息',
           )
-          : nodes.map((node) => {
+          : nodes.map((node, index) => {
             const isExpanded = expanded[node.nodeKey] === true
+            const nodeLineage = lineage[index]
+            const showBadge = nodeLineage.badge > 0
+            const isLineageOpen = lineageOpen[node.nodeKey] === true
             return React.createElement(
               'div',
               { key: node.nodeKey, style: itemStyle, onClick: () => toggle(node.nodeKey) },
@@ -180,9 +252,53 @@ function createHistoryView(
                     + (node.boundarySeq === null ? ' · 进行中' : ' · 可续写'),
                   ),
                 ),
+                showBadge
+                  ? React.createElement(
+                    'span',
+                    {
+                      style: badgeStyle,
+                      onClick: (event: { stopPropagation: () => void }) => {
+                        event.stopPropagation()
+                        toggleLineage(node.nodeKey)
+                      },
+                    },
+                    `分叉 ${nodeLineage.badge}`,
+                  )
+                  : null,
                 React.createElement('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary)' } },
                   isExpanded ? '▾' : '▸'),
               ),
+              isLineageOpen
+                ? React.createElement(
+                  'div',
+                  { style: dropdownStyle, onClick: (event: { stopPropagation: () => void }) => event.stopPropagation() },
+                  nodeLineage.sharedSessions.map((shared) => React.createElement(
+                    'div',
+                    {
+                      key: shared.sessionId,
+                      style: dropdownRowStyle,
+                      onClick: () => { sessions?.open(shared.sessionId) },
+                    },
+                    React.createElement(
+                      'div',
+                      { style: { minWidth: 0, flex: 1 } },
+                      React.createElement(
+                        'div',
+                        { style: { fontSize: '12px', color: 'var(--dsw-alias-label-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                        shared.displayTitle ?? shared.sessionId,
+                      ),
+                      React.createElement(
+                        'div',
+                        { style: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                        shared.nodes !== undefined && shared.nodes.length > 0
+                          ? `叶子：${shared.nodes[shared.nodes.length - 1].summary || kindLabel(shared.nodes[shared.nodes.length - 1].kind)}`
+                          : shared.sessionId,
+                      ),
+                    ),
+                    React.createElement('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-brand-primary)' } }, '切换'),
+                  )),
+                )
+                : null,
               isExpanded && node.text !== ''
                 ? React.createElement('div', { style: expandedTextStyle }, node.text)
                 : null,
