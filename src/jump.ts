@@ -58,3 +58,16 @@ export function resolveJumpTarget(
   }
   return fallback === null ? null : fallback.key
 }
+
+/**
+ * 已加载窗口内的最小 anchorSeq（= 窗口起点）。
+ * loadOlder 翻页跳转的进度判断：翻页后该值变小才算真的加载到了更早内容；
+ * 空列表返回 null。
+ */
+export function minAnchorSeq(nodes: readonly JumpChatNodeLike[]): number | null {
+  let min: number | null = null
+  for (const node of nodes) {
+    if (min === null || node.anchorSeq < min) min = node.anchorSeq
+  }
+  return min
+}

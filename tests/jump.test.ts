@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveJumpTarget, type JumpChatNodeLike } from '../src/jump.js'
+import { minAnchorSeq, resolveJumpTarget, type JumpChatNodeLike } from '../src/jump.js'
 
 /** 历史节点：第 2 轮，seq 20–30。 */
 const historyNode = { turn: 2, startSeq: 20, endSeq: 30 }
@@ -51,5 +51,19 @@ describe('resolveJumpTarget', () => {
 
   it('空列表返回 null', () => {
     expect(resolveJumpTarget(historyNode, [])).toBeNull()
+  })
+})
+
+describe('minAnchorSeq（翻页进度判断）', () => {
+  it('返回最小 anchorSeq（窗口起点）', () => {
+    expect(minAnchorSeq([node('a', 30, 1), node('b', 10, 1), node('c', 20, 2)])).toBe(10)
+  })
+
+  it('空列表返回 null', () => {
+    expect(minAnchorSeq([])).toBeNull()
+  })
+
+  it('单元素返回自身', () => {
+    expect(minAnchorSeq([node('a', 42, 3)])).toBe(42)
   })
 })

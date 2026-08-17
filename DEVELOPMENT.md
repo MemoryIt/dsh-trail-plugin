@@ -6,7 +6,7 @@
 
 ## 1. 当前状态
 
-- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column`：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠 + 拖拽调宽/记忆 + **点击行内跳转**（历史节点 → 会话快照按 turn/anchorSeq 映射 → `data-chat-anchor-key` 行 `scrollIntoView`，落点=轮首用户行），77 测试全绿）。
+- **已完成**：骨架、挂载验证、M1–M4、**真左栏**（`feature/left-column`：shell.overlay 浮动列 + 内容让位 + 节点列表 + 折叠 + 拖拽调宽/记忆 + **点击行内跳转含分页兜底**（目标不在已加载窗口时逐页 `session.loadOlder()` 翻页，hasMore/openState/窗口起点进度三重守卫 + 20 页上限；落点=轮首用户行；等行渲染进 DOM 后 scrollIntoView），80 测试全绿）。
 - **待办**：左栏交互补全（fork 续写 → 谱系角标迁移 → 窄屏自动折叠）、M5（二级完整路径）、行间跳转/续写 UI。
 - **验证约定**：client bundle 的 rev = 文件 sha1 前 12 位；**实测 web 服务器按请求实时计算 manifest**（`pnpm build` 后浏览器刷新即可见，无需重启 GUI——旧记录"重启才进 boot manifest"已过时）。
 - 环境：DSH 源码在 `/app`（只读参考，禁止修改）；`DSH_HOME=/data/dsh-home`；GUI 在 `127.0.0.1:3080`；dsh CLI 用 `node /app/apps/cli/lib/bin.js`。
@@ -62,11 +62,11 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
 
 ## 7. 下一步（按数据就绪度）
 
-1. **左栏交互补全**（`feature/left-column`，骨架 + 拖宽/记忆 + 行内跳转已完成）：
-   a. ~~点击节点行内跳转~~（完成：`src/jump.ts` 纯映射 + 左栏行 onClick；跳转落点=轮首用户行；失败提示：聊天视图未激活 / 目标未加载；瞬态提示 timer 1.6s）。
+1. **左栏交互补全**（`feature/left-column`，骨架 + 拖宽/记忆 + 行内跳转（含分页兜底）已完成）：
+   a. ~~点击节点行内跳转~~（完成：`src/jump.ts` 纯映射 + 左栏行 onClick；落点=轮首用户行；**超出已加载窗口自动 `session.loadOlder()` 逐页翻页**（每页 50 条，上限 20 页；hasMore/openState/窗口起点三重守卫防空转）；翻页后轮询等行渲染进 DOM（4s 超时）；失败提示：聊天视图未激活 / 目标节点未加载或不存在）。
    b. fork 续写入口迁移到左栏行（现有 `sessions.fork + open` 逻辑）。
    c. 谱系角标/下拉迁移（M4 的节点中心索引在 root scope 直接用 `useSessions` 全量会话列表即可）。
    d. **窄屏自动折叠**：convRoot 宽度低于阈值（约 MIN_CHAT + MIN 列宽）自动折叠（拖拽钳制已就位，仅差阈值触发）。
-   e. 已知边界：非聊天视图（trajectory/旧 tab）无法编程切换（chatStore 私有）→ 提示用户手动切回；目标超出已加载窗口 → 提示（后续可 `loadOlder` 兜底）；跳转高亮留待 polish。
+   e. 已知边界：非聊天视图（trajectory/旧 tab）无法编程切换（chatStore 私有）→ 提示用户手动切回；超深历史（>20 页）放弃并提示；跳转高亮留待 polish。
 2. **旧 tab 去留**：左栏稳定后移除 `conversation.view` 注册（或加配置项 A/B）。
 3. **M5 二级完整路径**：数据已全在 client（每会话完整节点路径），基本是 UI。
