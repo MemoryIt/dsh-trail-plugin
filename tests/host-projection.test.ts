@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { apply, HISTORY_PROJECTION_KEY, HISTORY_PROJECTION_STATE_VERSION } from '../src/index.js'
 import type { LogEventLike } from '../src/history/fold.js'
 
@@ -24,13 +24,18 @@ function fakeProjectionRegistry() {
   }
 }
 
-function fakeCtx() {
+function fakeCtx(extra: Record<string, unknown> = {}) {
   const { registrations, registry } = fakeProjectionRegistry()
   const effects: Array<() => unknown> = []
   const ctx = {
     logger: () => ({ info: () => {}, warn: () => {}, error: () => {} }),
-    get: (name: string) => (name === 'sessionProjections' ? registry : undefined),
-    effect: (fn: () => unknown) => { effects.push(fn); return () => {} },
+    get: (name: string) => (name === 'sessionProjections' ? registry : extra[name]),
+    // 模拟 cordis ctx.effect：立即执行 setup 并记录，返回其 cleanup。
+    effect: (fn: () => unknown) => {
+      const cleanup = fn()
+      effects.push(fn)
+      return cleanup
+    },
   }
   return { registrations, effects, ctx }
 }
@@ -84,5 +89,22 @@ describe('host plugin 投影注册', () => {
       effect: () => () => {},
     }
     expect(() => apply(ctx as never)).not.toThrow()
+  })
+
+  it('sessionPersistence / sessionProjectionCache 齐备时启动后台补齐', async () => {
+    const cold = vi.fn(async () => ({ asOfSeq: -1, values: { history: { nodes: [] } } }))
+    const persistence = { list: async () => [{ id: 's1', createdAt: 0 }] }
+    const cache = { cachedSnapshot: () => undefined, coldSnapshot: cold }
+    const { effects, ctx } = fakeCtx({ sessionPersistence: persistence, sessionProjectionCache: cache })
+    apply(ctx as never)
+    // 第二个 effect 即后台补齐（hello world 是第一个）
+    expect(effects.length).toBe(2)
+    await vi.waitFor(() => expect(cold).toHaveBeenCalledWith('s1', expect.any(AbortSignal)))
+  })
+
+  it('sessionPersistence / sessionProjectionCache 缺席时不注册补齐 effect', () => {
+    const { effects, ctx } = fakeCtx()
+    apply(ctx as never)
+    expect(effects.length).toBe(1)
   })
 })

@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { backfillMissingHistory, type SessionPersistenceLike, type SessionProjectionCacheLike } from './backfill.js'
 import { foldHistoryIndex, initHistoryIndex } from './history/fold.js'
 import { historyIndexSchema } from './history/schema.js'
 import type { HistoryIndexState } from './history/types.js'
@@ -56,4 +57,19 @@ export function apply(ctx: Context, config: Partial<Options> = {}): void {
     view: (state: HistoryIndexState) => state,
     stateVersion: HISTORY_PROJECTION_STATE_VERSION,
   })
+
+  // 启动后补齐缺 history 投影缓存的旧会话（顺序、幂等、可中断）。
+  // history 投影注册前已存在、之后从未打开的会话没有持久化缓存行 → 列表行投影
+  // 缺 history → 左栏空态；coldSnapshot 是官方冷读补齐路径（缓存行+尾部重放 →
+  // 重折叠 → fail-soft 写回），与「会话打开时自动补齐」同一机制，只是批量提前触发。
+  const persistence = ctx.get('sessionPersistence') as SessionPersistenceLike | undefined
+  const cache = ctx.get('sessionProjectionCache') as SessionProjectionCacheLike | undefined
+  if (persistence !== undefined && cache !== undefined) {
+    ctx.effect(() => {
+      const controller = new AbortController()
+      void backfillMissingHistory({ persistence, cache, logger, signal: controller.signal })
+        .catch((error: unknown) => logger.warn(`history backfill: 后台补齐意外失败: ${String(error)}`))
+      return () => controller.abort()
+    })
+  }
 }
