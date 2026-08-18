@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import factory from '../src/client.js'
 
 /** 最小 react 桩：createElement + useState（可注入按调用顺序返回的初始值）+ useRef/useLayoutEffect。
@@ -507,6 +507,90 @@ describe('client bundle factory', () => {
     // 单行标题仍渲染；进行中节点无续写按钮
     expect(JSON.stringify(rendered)).toContain('进行中的节点')
     expect(findByText(rendered, '续写')).toBeNull()
+  })
+
+  it('跳转：目标已在聊天窗口 → 直接滚动到该行，不触发 loadOlder', async () => {
+    const scrollIntoView = vi.fn()
+    const loadOlder = vi.fn(async () => {})
+    const chatNodes = [
+      { key: 'chat-node-1', anchorSeq: 10, location: { kind: 'turn', turn: { turn: 1 } } },
+      { key: 'chat-node-2', anchorSeq: 20, location: { kind: 'turn', turn: { turn: 2 } } },
+    ]
+    const snapshot = {
+      chat: { nodes: { values: () => chatNodes } },
+      openState: 'open',
+      hasMore: false,
+      loadingOlder: false,
+    }
+    const sessions = {
+      binding: (id: string) => id === 's-root'
+        ? { session: { getSnapshot: () => snapshot, loadOlder } }
+        : undefined,
+    }
+    vi.stubGlobal('document', {
+      querySelector: (sel: string) => (sel === '[data-chat-flow]' ? {} : null),
+      querySelectorAll: () => [{
+        dataset: { chatAnchorKey: 'chat-node-1' },
+        scrollIntoView,
+      }],
+    })
+    try {
+      const { registrations, ctx } = fakeCtx(sessions)
+      const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }]))
+      plugin.apply(ctx as never)
+      const overlay = registrations.find(r => r.key === 'shell.overlay')
+      const rendered = overlay?.effect.component({
+        useSessions: (selector) => selector(leftColumnSessionsState()),
+      })
+      // 点击节点 1（turn 1）→ 命中 chat-node-1 → 立即滚动
+      const root = findElementByKey(rendered, '1')
+      const row = root?.children?.[0] as { props?: Record<string, unknown> } | undefined
+      ;(row?.props?.onClick as () => void)?.()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+      expect(loadOlder).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('跳转：目标不在窗口且 !hasMore → 不翻页直接失败（NOT_FOUND）', async () => {
+    const scrollIntoView = vi.fn()
+    const loadOlder = vi.fn(async () => {})
+    const snapshot = {
+      chat: { nodes: { values: () => [] } }, // 窗口内无任何节点
+      openState: 'open',
+      hasMore: false,
+      loadingOlder: false,
+    }
+    const sessions = {
+      binding: (id: string) => id === 's-root'
+        ? { session: { getSnapshot: () => snapshot, loadOlder } }
+        : undefined,
+    }
+    vi.stubGlobal('document', {
+      querySelector: (sel: string) => (sel === '[data-chat-flow]' ? {} : null),
+      querySelectorAll: () => [],
+    })
+    try {
+      const { registrations, ctx } = fakeCtx(sessions)
+      const plugin = factory(() => fakeReact([{ width: 280, collapsed: false }]))
+      plugin.apply(ctx as never)
+      const overlay = registrations.find(r => r.key === 'shell.overlay')
+      const rendered = overlay?.effect.component({
+        useSessions: (selector) => selector(leftColumnSessionsState()),
+      })
+      const root = findElementByKey(rendered, '1')
+      const row = root?.children?.[0] as { props?: Record<string, unknown> } | undefined
+      ;(row?.props?.onClick as () => void)?.()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(loadOlder).not.toHaveBeenCalled() // !hasMore：不空翻页
+      expect(scrollIntoView).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('捕获 sessions 服务供 fork 使用', () => {
