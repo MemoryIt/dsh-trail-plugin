@@ -23,7 +23,10 @@ import { buildHistoryIndex, lineageForNode } from './history/index.js'
 import { type LineageSessionLike } from './history/lineage.js'
 import { kindLabel } from './history/text.js'
 import type { HistoryIndexState, HistoryNodeEntry } from './history/types.js'
-import { minAnchorSeq, resolveJumpTarget, type JumpChatNodeLike, type JumpChatNodeRawLike } from './jump.js'
+import {
+  jumpFailureMessage, matchTarget, minAnchorSeq, resolveFallback,
+  type JumpChatNodeLike, type JumpChatNodeRawLike, type JumpFailureCode,
+} from './jump.js'
 import {
   LEFT_COLUMN_DEFAULT_WIDTH, LEFT_COLUMN_MAX_WIDTH, LEFT_COLUMN_MIN_WIDTH,
   clampColumnWidth, readLeftColumnPrefs, writeLeftColumnPrefs,
@@ -54,6 +57,8 @@ interface ConversationSnapshotLike {
   openState?: string
   /** 是否存在更早的窗口外历史。 */
   hasMore?: boolean
+  /** 一次 loadOlder 是否在途（在途时再调用会守卫空转，需等待）。 */
+  loadingOlder?: boolean
 }
 
 /** SessionBinding.session 的最小结构（ObservableSnapshot<ConversationSnapshot> + ISession 动词）。 */
@@ -85,6 +90,8 @@ const SPIN_CSS = '@keyframes dsh-trail-spin { from { transform: rotate(0deg); } 
 /** cordis 插件入口（client 侧）。 */
 interface PluginEntry {
   name: string
+  /** 必选服务（fiber inject）：slots / sessions 齐备后才激活 apply。 */
+  inject: string[]
   apply(ctx: Context): void
 }
 
@@ -129,10 +136,13 @@ function toLineageSessions(state: SessionListStateLike | undefined): LineageSess
 /** 左栏面板条目 id（shell.overlay list 槽）。 */
 const LEFT_COLUMN_ID = 'dsh-trail-left-column'
 
-/** 翻页跳转：最多连续翻页数（每页 50 条消息，20 页 ≈ 1000 条，超深历史放弃）。 */
-const JUMP_MAX_PAGES = 20
+/** 翻页跳转：单次跳转最多连续翻页数（每页 50 条消息，100 页 ≈ 5000 条；
+ * 官方无 O(1) 跳窗 API，超深历史逐页翻慢但可达，超限给超时提示）。 */
+const JUMP_MAX_PAGES = 100
+/** 单次跳转的总超时（翻页 + 行等待）。 */
+const JUMP_TOTAL_TIMEOUT_MS = 15000
 /** 翻页后等待聊天行渲染进 DOM 的超时与轮询间隔。 */
-const JUMP_ROW_WAIT_MS = 4000
+const JUMP_ROW_WAIT_MS = 8000
 const JUMP_ROW_POLL_MS = 60
 
 /** 左栏组件 props：root scope 标准 kit 的 useSessions（无需 session 作用域）。 */
@@ -239,12 +249,15 @@ function createLeftColumn(
         .catch((error: unknown) => { showHint(`续写失败：${String(error)}`) })
     }
 
-    // 行内跳转（异步，含分页兜底）：
-    // 历史节点 → 会话快照 → 聊天节点 key（resolveJumpTarget）；目标不在已
-    // 加载窗口时逐页 session.loadOlder() 翻页直到找到或无法再翻（hasMore /
-    // openState / 窗口起点进度三重守卫）；然后等聊天行渲染进 DOM
-    // （data-chat-anchor-key）→ scrollIntoView（滚动口是官方
-    // [data-conversation-scroll]）。失败给瞬态提示，不做任何写操作。
+    // 行内跳转（异步，连点 loadOlder 扩窗直到目标可见或 !hasMore）：
+    // 历史节点 → 会话快照 → 聊天节点 key（matchTarget，只匹配 visible 行）；
+    // 目标不在已加载窗口时循环 session.loadOlder()（等价官方「加载更早」
+    // 连点）把更早历史 prepend 进窗口，每页重新精确匹配；命中后等聊天行
+    // 渲染进 DOM（data-chat-anchor-key）→ scrollIntoView（滚动口是官方
+    // [data-conversation-scroll]）。终止条件：目标命中 / !hasMore（窗口即
+    // 日志起点）/ 页数或总超时 / 用户新跳转接管（gen 守卫）/ 聊天视图消失。
+    // hidden 与已压缩内容不在扩窗语义内：命中后行不渲染才走 resolveFallback
+    // 邻近可见回退，否则准确失败提示。
     const jumpGenRef = React.useRef(0)
 
     const findChatRow = (key: string): HTMLElement | null => {
@@ -261,7 +274,7 @@ function createLeftColumn(
       if (sessions === undefined || current === undefined) return
       // 聊天视图未挂载（切到 trajectory 等）→ 直接提示，避免白翻页。
       if (document.querySelector('[data-chat-flow]') === null) {
-        showHint('聊天视图未激活，请先切到聊天')
+        showHint(jumpFailureMessage('VIEW_INACTIVE'))
         return
       }
       const gen = jumpGenRef.current + 1
@@ -273,59 +286,120 @@ function createLeftColumn(
       const finishJump = (): void => {
         if (gen === jumpGenRef.current) setJumpingNodeKey(null)
       }
+      const fail = (code: JumpFailureCode, fallback = false): void => {
+        finishJump()
+        showHint(jumpFailureMessage(code, fallback))
+      }
       void (async () => {
-        // 快照 → 候选列表（turn/seq 对齐映射）
+        // 快照 → 候选列表（turn/seq 对齐映射）。只取可渲染行
+        // （visibility !== 'hidden'，与官方 chat.order 的 orderedVisible 同口径）：
+        // hidden 节点（仅 tool-call 的 assistant、被 retry 取代的 turn-error）
+        // 没有对应 DOM 行，不在扩窗语义内。
         const readCandidates = (): JumpChatNodeLike[] | null => {
           const snapshot = sessions?.binding(current)?.session?.getSnapshot()
           const chatNodes = snapshot?.chat?.nodes
           if (chatNodes === undefined) return null
-          return chatNodes.values().map((n) => ({
-            key: n.key,
-            anchorSeq: n.anchorSeq,
-            turn: n.location?.kind === 'turn' || n.location?.kind === 'step'
-              ? n.location.turn?.turn ?? -1
-              : -1,
-          }))
+          return chatNodes.values()
+            .filter((n) => n.visibility !== 'hidden')
+            .map((n) => ({
+              key: n.key,
+              anchorSeq: n.anchorSeq,
+              turn: n.location?.kind === 'turn' || n.location?.kind === 'step'
+                ? n.location.turn?.turn ?? -1
+                : -1,
+            }))
         }
-        // 目标不在已加载窗口 → 逐页 loadOlder 翻页直到找到或无法再翻。
-        const resolveWithPaging = async (): Promise<string | null> => {
-          for (let attempt = 0; attempt <= JUMP_MAX_PAGES; attempt += 1) {
-            const face = sessions?.binding(current)?.session
-            const candidates = readCandidates()
-            if (candidates === null || face === undefined) return null
-            const key = resolveJumpTarget(node, candidates)
-            if (key !== null) return key
-            if (attempt === JUMP_MAX_PAGES) return null
-            const snapshot = face.getSnapshot()
-            if (snapshot.openState !== 'open' || snapshot.hasMore !== true) return null
-            const before = minAnchorSeq(candidates)
-            await face.loadOlder()
-            if (gen !== jumpGenRef.current) return null
-            const after = minAnchorSeq(readCandidates() ?? [])
-            if (after === null || (before !== null && after >= before)) return null
+        const deadline = Date.now() + JUMP_TOTAL_TIMEOUT_MS
+        let pages = 0
+        let targetKey: string | null = null
+        // 扩窗直到精确命中或到达终止条件。
+        while (true) {
+          if (gen !== jumpGenRef.current) return
+          // 等待期间视图消失（切到 trajectory / 会话重挂载）：真实「未激活」。
+          if (document.querySelector('[data-chat-flow]') === null) {
+            fail('VIEW_INACTIVE')
+            return
           }
-          return null
+          const face = sessions?.binding(current)?.session
+          const candidates = readCandidates()
+          if (candidates === null || face === undefined) {
+            fail('VIEW_INACTIVE')
+            return
+          }
+          targetKey = matchTarget(node, candidates)
+          if (targetKey !== null) break
+          const snapshot = face.getSnapshot()
+          // 会话尚未水合完成（如刷新后 open 在途）→ 等待，不误报失败。
+          if (snapshot.openState !== 'open') {
+            if (snapshot.openState === 'error' || Date.now() > deadline) {
+              fail(snapshot.openState === 'error' ? 'VIEW_INACTIVE' : 'TIMEOUT')
+              return
+            }
+            await sleep(JUMP_ROW_POLL_MS)
+            continue
+          }
+          // 已接到最早历史仍无目标：内容不存在（已压缩 / 从未可见）。
+          if (snapshot.hasMore !== true) {
+            fail('NOT_FOUND')
+            return
+          }
+          if (pages >= JUMP_MAX_PAGES || Date.now() > deadline) {
+            fail('TIMEOUT')
+            return
+          }
+          if (snapshot.loadingOlder) {
+            await sleep(JUMP_ROW_POLL_MS)
+            continue
+          }
+          const before = minAnchorSeq(candidates)
+          await face.loadOlder()
+          pages += 1
+          if (gen !== jumpGenRef.current) return
+          const after = minAnchorSeq(readCandidates() ?? [])
+          // 翻页无进展（loadOlder 守卫空转）→ 终止避免死循环。
+          if (after === null || (before !== null && after >= before)) {
+            fail('NOT_FOUND')
+            return
+          }
         }
-        const key = await resolveWithPaging()
-        if (gen !== jumpGenRef.current) return
-        if (key === null) {
-          finishJump()
-          showHint('目标节点未加载或不存在')
-          return
-        }
-        // 等行渲染进 DOM（翻页后 React 异步提交新行），超时给提示。
+        // 命中：等行渲染进 DOM（翻页后 React 异步提交新行）。
         let row: HTMLElement | null = null
         for (let waited = 0; waited <= JUMP_ROW_WAIT_MS; waited += JUMP_ROW_POLL_MS) {
-          row = findChatRow(key)
+          if (gen !== jumpGenRef.current) return
+          if (document.querySelector('[data-chat-flow]') === null) {
+            fail('VIEW_INACTIVE')
+            return
+          }
+          row = findChatRow(targetKey as string)
           if (row !== null) break
           if (waited >= JUMP_ROW_WAIT_MS) break
           await sleep(JUMP_ROW_POLL_MS)
-          if (gen !== jumpGenRef.current) return
         }
         if (gen !== jumpGenRef.current) return
         if (row === null) {
-          finishJump()
-          showHint('聊天视图未激活，请先切到聊天')
+          // 精确 key 命中但行不渲染：节点为 hidden / 官方未呈现 → 邻近可见回退。
+          const fallbackKey = resolveFallback(node, readCandidates() ?? [], targetKey ?? undefined)
+          if (fallbackKey !== null) {
+            let fallbackRow: HTMLElement | null = null
+            for (let waited = 0; waited <= JUMP_ROW_WAIT_MS; waited += JUMP_ROW_POLL_MS) {
+              if (gen !== jumpGenRef.current) return
+              if (document.querySelector('[data-chat-flow]') === null) {
+                fail('VIEW_INACTIVE')
+                return
+              }
+              fallbackRow = findChatRow(fallbackKey)
+              if (fallbackRow !== null) break
+              if (waited >= JUMP_ROW_WAIT_MS) break
+              await sleep(JUMP_ROW_POLL_MS)
+            }
+            if (gen !== jumpGenRef.current) return
+            if (fallbackRow !== null) {
+              fail('TARGET_HIDDEN', true)
+              fallbackRow.scrollIntoView({ block: 'start' })
+              return
+            }
+          }
+          fail('TARGET_HIDDEN', false)
           return
         }
         finishJump()
@@ -983,7 +1057,8 @@ function createLeftColumn(
 
 /**
  * 浏览器 bundle factory：返回 cordis 插件入口。
- * 在 apply 里捕获 client sessions / timer 服务（fork / open / 跳转翻页用），
+ * `inject` 声明 slots / sessions 为必选服务（fiber 等待齐备后才进入 apply，
+ * 缺席不再静默跳过）；timer 仍是可选服务（ctx.get 读取，fork 等待/瞬态提示用），
  * 并把真左栏注册进官方 `shell.overlay` 浮层槽。
  */
 export default function factory(require: BundleRequire): PluginEntry {
@@ -995,10 +1070,11 @@ export default function factory(require: BundleRequire): PluginEntry {
 
   return {
     name: PLUGIN_NAME,
+    inject: ['slots', 'sessions'],
     apply(ctx: Context) {
-      const slots = ctx.get('slots') as ClientSlots | undefined
-      if (slots === undefined) return
-      const sessions = ctx.get('sessions', false) as ClientSessions | undefined
+      // 必选服务（inject 声明保证 present）：
+      const slots = (ctx as unknown as { slots: ClientSlots }).slots
+      const sessions = (ctx as unknown as { sessions: ClientSessions }).sessions
       const timer = ctx.get('timer', false) as ClientTimer | undefined
       // 真左栏：shell.overlay 浮动列 + 内容让位 + 拖宽/记忆 + 行内跳转。
       slots.inject('shell.overlay', () => slots.register(

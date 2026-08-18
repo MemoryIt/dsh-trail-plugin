@@ -27,7 +27,10 @@
   "dsh": {
     "client": {
       "platform": "web",
-      "inject": [],
+      "inject": [
+        "slots",
+        "sessions"
+      ],
       "immediately": false
     }
   },
