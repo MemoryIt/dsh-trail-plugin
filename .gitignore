@@ -3,5 +3,6 @@ lib/
 dist/
 coverage/
 *.tsbuildinfo
+*.tgz
 *.log
 .DS_Store

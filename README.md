@@ -72,6 +72,37 @@ pnpm build       # tsc 构建 + esbuild 打 client bundle（lib/client.js）
 pnpm verify      # 类型检查 + 测试 + 构建 一条龙
 ```
 
+## 发布到 npm
+
+包形态已就绪（`main`/`exports["./client"]`/`types` 指向 `lib/`，`files` 只含
+`lib` + `cordis.patch.yml` + LICENSE，`dsh.bundle` 声明让 `dsh plugin add` 安装
+后自动进 bundles 层）。`prepublishOnly` 会在发布前自动跑 `pnpm verify`，保证
+`lib/`（gitignored）始终是新的。
+
+```bash
+# 一次性：登录 npm（需要有 npm 账号）
+npm login            # 或 pnpm login
+
+# 每次发版：
+pnpm version patch   # 或 minor / major；也可手改 package.json
+pnpm publish         # 先自动 pnpm verify（typecheck + 测试 + build），再打包上传
+git push --tags
+```
+
+发布前可先用 `pnpm pack` 生成 `dsh-trail-plugin-<version>.tgz` 检查包内容
+（`npm pack --dry-run` 只列出不生成）。包名 `dsh-trail-plugin` 已在 npm 确认可用。
+
+用户侧安装（与本地路径安装同一机制，只是从 registry 取预构建产物）：
+
+```bash
+dsh plugin --profile <name> add dsh-trail-plugin        # 从 npm
+dsh plugin --profile <name> add ./dsh-trail-plugin-0.1.0.tgz   # 从 tarball（无网络场景）
+```
+
+> git 安装（`add github:<owner>/<repo>`）会拿到源码而不是构建产物，需要包内
+> `prepare` 脚本（已有：`pnpm build`）且用户侧在 profile 的
+> `pnpm-workspace.yaml` 放行 `allowBuilds`——优先走 npm/tarball 分发预构建产物。
+
 ## 挂载验证（smoke test）
 
 单测只能证明代码正确，**证明「DSH 启动时真的加载到了本插件」**要靠真实启动：

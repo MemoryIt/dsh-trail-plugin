@@ -21,7 +21,6 @@
       "types": "./lib/client.d.ts",
       "default": "./lib/client.js"
     },
-    "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -49,7 +48,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "pnpm typecheck && pnpm test && pnpm build"
+    "verify": "pnpm typecheck && pnpm test && pnpm build",
+    "prepare": "pnpm build",
+    "prepublishOnly": "pnpm verify"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
