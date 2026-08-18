@@ -27,8 +27,6 @@ function fakeReact(states: unknown[] = []) {
 interface FakeEntry {
   options: { id: string; order?: number; label?: string }
   component: (props: {
-    sessionId?: string
-    useProjection?: (key: string) => unknown
     useSessions?: (selector: (state: unknown) => unknown) => unknown
   }) => unknown
 }
@@ -217,16 +215,12 @@ describe('client bundle factory', () => {
     expect(typeof plugin.apply).toBe('function')
   })
 
-  it('apply 把 history 视图注册进 conversation.view 环，并注册左栏到 shell.overlay', () => {
+  it('apply 只注册左栏到 shell.overlay（conversation.view 历史索引 tab 已移除）', () => {
     const { registrations, ctx } = fakeCtx()
     const plugin = factory(() => fakeReact())
     plugin.apply(ctx as never)
-    expect(registrations).toHaveLength(2)
-    expect(registrations.map(r => r.key)).toEqual(['conversation.view', 'shell.overlay'])
-    const entry = registrations[0].effect
-    expect(entry.options.id).toBe('history')
-    expect(entry.options.order).toBe(20)
-    expect(entry.options.label).toBe('历史索引')
+    expect(registrations).toHaveLength(1)
+    expect(registrations.map(r => r.key)).toEqual(['shell.overlay'])
   })
 
   it('左栏条目注册进 shell.overlay（list 槽：id/order/label）', () => {
@@ -513,66 +507,6 @@ describe('client bundle factory', () => {
     // 单行标题仍渲染；进行中节点无续写按钮
     expect(JSON.stringify(rendered)).toContain('进行中的节点')
     expect(findByText(rendered, '续写')).toBeNull()
-  })
-
-  it('视图渲染节点 + 谱系角标（共享会话数）', () => {
-    const { registrations, ctx } = fakeCtx()
-    const plugin = factory(() => fakeReact())
-    plugin.apply(ctx as never)
-    const rendered = registrations[0].effect.component({
-      sessionId: 's-root',
-      useProjection: (key) => (key === 'history' ? fakeProjection() : undefined),
-      useSessions: (selector) => selector(fakeSessionsState()),
-    })
-    const text = JSON.stringify(rendered)
-    expect(text).toContain('History Index')
-    expect(text).toContain('2 个逻辑节点')
-    expect(text).toContain('帮我写个插件')
-    // s-a 与 s-root 共享节点 1（boundarySeq 10 对齐）→ 节点 1 角标 1
-    expect(text).toContain('分叉 1')
-    expect(text).toContain('可续写')
-  })
-
-  it('展开角标下拉：列出共享会话 + 叶子摘要', () => {
-    const { registrations, ctx } = fakeCtx()
-    // 第二个 useState（lineageOpen）预置展开节点 1 的下拉
-    const plugin = factory(() => fakeReact([{}, { '1': true }]))
-    plugin.apply(ctx as never)
-    const rendered = registrations[0].effect.component({
-      sessionId: 's-root',
-      useProjection: (key) => (key === 'history' ? fakeProjection() : undefined),
-      useSessions: (selector) => selector(fakeSessionsState()),
-    })
-    const text = JSON.stringify(rendered)
-    expect(text).toContain('分叉会话')       // 下拉行标题
-    expect(text).toContain('叶子：分叉后的新问题') // 分支叶子摘要
-    expect(text).toContain('切换')
-  })
-
-  it('无后代时无角标', () => {
-    const { registrations, ctx } = fakeCtx()
-    const plugin = factory(() => fakeReact())
-    plugin.apply(ctx as never)
-    const rendered = registrations[0].effect.component({
-      sessionId: 's-root',
-      useProjection: (key) => (key === 'history' ? fakeProjection() : undefined),
-      useSessions: (selector) => selector({ ids: ['s-root'], byId: { 's-root': { id: 's-root', displayTitle: '根会话' } } }),
-    })
-    const text = JSON.stringify(rendered)
-    expect(text).not.toContain('分叉')
-  })
-
-  it('无投影值时渲染空态提示', () => {
-    const { registrations, ctx } = fakeCtx()
-    const plugin = factory(() => fakeReact())
-    plugin.apply(ctx as never)
-    const rendered = registrations[0].effect.component({
-      sessionId: 'sess-1',
-      useProjection: () => undefined,
-      useSessions: () => undefined,
-    })
-    const text = JSON.stringify(rendered)
-    expect(text).toContain('暂无节点')
   })
 
   it('捕获 sessions 服务供 fork 使用', () => {

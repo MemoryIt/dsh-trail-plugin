@@ -4,10 +4,12 @@
 > 2026-08-17（左栏交互 feature/left-column-interactions，已 no-ff 合并回 main）+
 > 2026-08-17（半圆按钮 feature/expand-button-shape，已 no-ff 合并回 main）+
 > 2026-08-17（交接核查：回退破坏性分支 + 补全官方层叠/结构调研）+
-> 2026-08-18（host 缓存补齐 feature/host-backfill：启动后台顺序冷读补齐缺 history 的旧会话）
-> 五轮开发对话的后续开发所需信息。
+> 2026-08-18（host 缓存补齐 feature/host-backfill：启动后台顺序冷读补齐缺 history 的旧会话）+
+> 2026-08-18（移除历史索引 tab feature/remove-history-tab：conversation.view 注册删除，保留 shell.overlay 左栏）
+> 六轮开发对话的后续开发所需信息。
 > 代码变更历史见 git log（`b32e2ba` 起，里程碑：skeleton → M1–M4 → 左栏 spike/拖宽/跳转/渲染协调 →
-> 分叉交互 → 行精简 → 分支列表 → 背景统一 → 跳转指示 → header 对齐 → 折叠按钮 → 半圆按钮）。
+> 分叉交互 → 行精简 → 分支列表 → 背景统一 → 跳转指示 → header 对齐 → 折叠按钮 → 半圆按钮 →
+> host 缓存补齐 → 移除历史索引 tab）。
 > 详细设计见 `DESIGN.md`（Session Tree / History Index 插件）。
 
 ## 1. 当前状态
@@ -23,7 +25,7 @@
   - **折叠按钮重构**——移除 28px 竖向 rail，折叠态面板 0 宽，☰ 展开按钮作为 Fragment 兄弟悬浮，与 header「«」关于分割线镜像对称（见 §2）。
   - **半圆按钮重构**（feature/expand-button-shape）——折叠按钮 `<-` 配**左半圆**、展开按钮 `->` 配**右半圆**：两半圆**同半径 r=10（20×20）、gap 0 紧贴各自边缘**——折叠态右半圆直径边贴对话区内容左缘（恰好落在官方 header 左 padding 20px 区内，不压标题）、展开态左半圆直径边贴面板右缘（header 右 padding 0）——直径边都对着内容左缘、弧朝外，视觉拼成一个整圆；垂直中心 = titleRow 中心 y=28（translateY(-50%) 精确定心）；hover 高亮勾勒半圆 + title 描述；两按钮互斥出现，共用 `railHovered`（见 §2 决策表）。**GUI 实测通过**（用户确认无问题），已 no-ff 合并回 main（`7daec7d` + merge `544056d`），91 测试全绿。
 - **git/分支状态**：main 领先 `origin/main` **2 个提交（未 push）**。本地分支：`feature/expand-button-shape`（已合并，保留）、`feature/left-column` / `feature/left-column-interactions`（已合并，保留）、`feature/plugin-skeleton`（历史）、**`feature/narrow-auto-collapse` = 破坏性分支**（上次开发破坏了左栏功能后被放弃回退，**勿在其上继续开发**，保留仅作参考）。开发约定：中文 commit + 左栏 scope（`feat/fix/style/docs(left-column): …`）、特性合并回 main 一律 **no-ff**、feature 分支合并不删。
-- **待办**：① **host 侧补齐缺 history 的投影缓存** — ✅ 代码已完成（`src/backfill.ts` 启动后台顺序冷读补齐 + `src/index.ts` 接线，幂等/可中断，见 §2 决策行与 §7 验证配方；**host 改动需重启 GUI 生效**，重启后 missing 数应归零）；② 左栏交互补全剩 **窄屏自动折叠**（阈值触发，拖拽钳制已就位）+ 跳转高亮 polish；③ 旧 tab 去留；④ M5 二级完整路径。
+- **待办**：① **host 侧补齐缺 history 的投影缓存** — ✅ 已实现并 GUI 实测通过（`src/backfill.ts` 启动后台顺序冷读补齐 + `src/index.ts` 接线，幂等/可中断；已 no-ff 合并回 main `fdaae76`）；③ **旧 tab 去留** — ✅ 已移除（`feature/remove-history-tab`：删除 `conversation.view` 注册与 `createHistoryView` 整块，保留左栏共享的 `toLineageSessions`/接口/`history/*`；**client 改动刷新即生效无需重启**）；② 左栏交互补全剩 **窄屏自动折叠**（阈值触发，拖拽钳制已就位）+ 跳转高亮 polish；④ M5 二级完整路径。
 - **验证约定**：client bundle 的 rev = 文件 sha1 前 12 位；**实测 web 服务器按请求实时计算 manifest**（`pnpm build` 后浏览器刷新即可见，无需重启 GUI——旧记录"重启才进 boot manifest"已过时）。**注意 curl 首查可能命中 index.html 缓存返回旧 rev，加 cache-buster（`?cb=$(date +%s%N)`）再查**。host 侧（src/index.ts）改动仍需重启 GUI 生效。
 - 环境：DSH 源码在 `/app`（只读参考，禁止修改）；`DSH_HOME=/data/dsh-home`；GUI 在 `127.0.0.1:3080`；dsh CLI 用 `node /app/apps/cli/lib/bin.js`。
 
@@ -35,7 +37,7 @@
 | **fork 边界 = turn/end 事件 seq** | `sessions.fork` 校验 boundary 必须是连续事件 seq 且前缀不能停在未闭合 turn（`OPEN_TURN` 报错）——turn/end seq 天然安全 |
 | **nodeKey = `(rootId, boundarySeq)`** | 结构身份：fork 深拷贝保留事件 seq，同一逻辑节点在整棵 fork 树内 seq 唯一且位置对齐；rootId（沿官方 parentId 上溯）消除无关树之间的 seq 命名空间碰撞。**匹配键必须用结构身份，不能用内容**（内容相同是巧合信号，会假阳性） |
 | **角标 = 共享该逻辑节点的全部会话**（排除自身） | 用户明确口径：如 A→B→C→D / A→B→F / A→B→C→G 中，会话 1 的节点 B 应显示分叉 2（会话 0 与 2），祖先/兄弟/后代都计入。节点中心索引桶成员即全部共享会话 |
-| **挂载在 `conversation.view`（tab）→ 真左栏挂 `shell.overlay`** | 早期因"替换 session 体要继承草稿镜像 + 视图环职责、tab 选中态在内部 chatStore"搁置左栏；2026-08-17 研究确认槽位机制硬墙：子槽位声明排他（重复声明 register throw）+ chatStore/views 账本私有 + 无 renderSlot 授权 = 替换 = 重写聊天渲染。**改用 `shell.overlay` 浮动列**（list 槽、replaceRisk none、唯一可覆盖会话列的可加性座位），内容让位 = 会话列根元素 padding-left；tab 保留作对比，稳定后移除 |
+| **挂载在 `conversation.view`（tab）→ 真左栏挂 `shell.overlay`** | 早期因"替换 session 体要继承草稿镜像 + 视图环职责、tab 选中态在内部 chatStore"搁置左栏；2026-08-17 研究确认槽位机制硬墙：子槽位声明排他（重复声明 register throw）+ chatStore/views 账本私有 + 无 renderSlot 授权 = 替换 = 重写聊天渲染。**改用 `shell.overlay` 浮动列**（list 槽、replaceRisk none、唯一可覆盖会话列的可加性座位），内容让位 = 会话列根元素 padding-left；~~tab 保留作对比，稳定后移除~~（**已移除**：feature/remove-history-tab 删除 `conversation.view` 注册；官方 view 环仍剩 chat order0 + trajectory order10 两项 → tabs 行照常显示 → 左栏 header 75px 分隔线对齐不受影响） |
 | **行内跳转走官方 DOM 锚点（左栏后续迭代）** | 聊天行自带 `data-chat-anchor-key`（= 会话快照节点 key），滚动容器 `[data-conversation-scroll]`；历史节点 → 聊天节点映射用 `ctx.sessions.binding(id).session`（ObservableSnapshot\<ConversationSnapshot\>）按 turn/anchorSeq 对齐 |
 | **左栏几何必须实时查询节点（渲染协调）** | `conversation` 槽位是 session-maybe：会话切换时内容按 `epoch` 重挂载（DOM 节点被替换）。若 layout effect 闭包缓存 convRoot/panel 引用 → 切换后指向 detached 节点 → RO 永不触发、`getBoundingClientRect` 全 0 → 面板钉死 (0,0)/0 高（表现：切走切回左栏消失、关侧栏竖条不回位）。**必须**：effect deps 含 current（切换即重跑）、每次 applyLayout/漂移轮询实时 `closest/querySelector`、cleanup 实时清理 |
 | **历史投影对"注册前已沉睡"的旧会话缺失** | history 投影 2026-08-16 注册；此前存在且之后从未打开的会话，checkpoint 从未写 history 缓存行 → 列表行投影无 history（实测 45 会话仅 20 有）。会话**打开**会走 coldSnapshot（缓存行+尾部重放）补齐并写回。列表行投影来源：live 会话 = `sessionProjections.snapshot(session)`（实时），cold 会话 = `sessionProjectionCache.cachedSnapshot(meta)`（只读缓存行） |
@@ -135,6 +137,6 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
    b. ~~fork 续写入口迁移到左栏行~~（完成：行尾「续写」按钮 hover 显现（opacity/pointerEvents 随行 hover 态），点击 `sessions.fork({sessionId: current, atSeq: boundarySeq, increaseTitle: true})` → `open(childId)`，失败走 showHint 瞬态提示；进行中节点不渲染按钮）。
    c. ~~谱系角标/下拉迁移~~（完成：左栏新增全量 `useSessions` selector → `toLineageSessions` → `buildHistoryIndex` → **行首分叉数字**（hover/展开变官方 chevron）点击展开共享会话下拉（叶子摘要 + 切换）；展开体是**行下方 column 兄弟**（复刻官方 DisclosureRow 骨架，marginLeft 20 缩进，不再作为行内 flex item——修复撑高/挤占 bug）；`lineageForNode` 复用，`src/history/*` 零改动）。
    d. **窄屏自动折叠**：convRoot 宽度低于阈值（约 MIN_CHAT + MIN 列宽）自动折叠（拖拽钳制已就位，仅差阈值触发）。**半圆按钮已就位**（折叠态 -> 右半圆贴对话区左缘、展开态 <- 左半圆贴面板右缘），阈值触发逻辑补上即可完整。
-   e. 已知边界：非聊天视图（trajectory/旧 tab）无法编程切换（chatStore 私有）→ 提示用户手动切回；超深历史（>20 页）放弃并提示；跳转高亮留待 polish。
-2. **旧 tab 去留**：左栏稳定后移除 `conversation.view` 注册（或加配置项 A/B）。
+   e. 已知边界：非聊天视图（trajectory）无法编程切换（chatStore 私有）→ 提示用户手动切回；超深历史（>20 页）放弃并提示；跳转高亮留待 polish。
+2. **旧 tab 去留** — ✅ **已移除**（2026-08-18，`feature/remove-history-tab`）：删除 `src/client.ts` 的 `conversation.view` 注册块 + `createHistoryView` 整块（含其局部样式、`VIEW_ID`/`HistoryViewProps`/`KIND_ICONS`）；保留左栏共享的 `toLineageSessions`、`SessionSummaryLike`/`SessionListStateLike`、`ClientSessions`/`ClientSlots`、`history/*`/`jump`/`left-column` 纯逻辑与 `shell.overlay` 注册；`tests/client.test.ts` 删 4 个 tab 用例、改写 apply 注册断言（只剩 shell.overlay）；98 测试全绿。**client 改动刷新即生效，无需重启 GUI**（官方 view 环剩 chat/trajectory 两项，tabs 行照常，左栏 75px header 对齐不受影响）。
 3. **M5 二级完整路径**：数据已全在 client（每会话完整节点路径），基本是 UI。

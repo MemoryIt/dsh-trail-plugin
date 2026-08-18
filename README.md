@@ -10,7 +10,8 @@ DeepSeek Harness（DSH）插件开发工程：Session Tree / History Index
 - **Host 半区**（`src/index.ts`）：注册 `history` 投影单元，把每个会话的
   SessionEvent 折叠为节点树；
 - **Client 半区**（`src/client.ts`）：经 `exports["./client"]` 导出，注册
-  `conversation.view` 的「历史索引」tab，经 `useProjection('history')`
+  `shell.overlay` 的真左栏（浮动列 + 内容让位 + 拖宽/记忆 + 行内跳转 +
+  fork 续写 + 谱系角标/下拉），经会话列表行投影 `projectionValues.history`
   读取完整索引；
 - **纯逻辑层**（`src/history/`）：事件折叠、摘要、类型（与平台无关、可直接单测）；
 - **挂载示例**（`cordis.yml`）：展示插件如何作为组合行进入 DSH 组合。
@@ -51,12 +52,13 @@ DeepSeek Harness（DSH）插件开发工程：Session Tree / History Index
 SessionEvent 日志（唯一事实来源，只读）
   → host 投影单元 fold.ts 折叠为 per-session 节点树
   → 官方投影缓存持久化（$DSH_HOME/storages/session_projcache.json）
-  → client useProjection('history') 读取完整索引（不受对话窗口限制，重启恢复）
+  → client 会话列表行投影 projectionValues.history 读取完整索引（不受对话窗口限制，重启恢复）
 ```
 
 节点：`nodeKey`（turn）/ `parentKey`（树边）/ `boundarySeq`（turn/end seq，安全
-fork 边界）/ kind / 摘要 / 内联文本（有界）。交互：点击节点内联展开查看，
-可续写节点提供「从这里续写」（`sessions.fork` + `sessions.open`）。
+fork 边界）/ kind / 摘要 / 内联文本（有界）。交互：点击节点行内跳转查看
+（超出窗口自动翻页兜底），可续写节点提供「续写」（`sessions.fork` +
+`sessions.open`），分叉节点行首数字展开共享会话下拉。
 
 ## 常用命令
 
