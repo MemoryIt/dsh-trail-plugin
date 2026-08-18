@@ -8,6 +8,13 @@ import { Config, normalizeOptions, type Options } from './options.js'
 /** 插件名：同时用作组合行 id 与日志命名空间。 */
 export const name = 'dsh-trail-plugin'
 
+/** 必选服务（cordis fiber inject）：投影注册表与会话投影缓存。
+ * 声明后 fiber 进入 PENDING，两者齐备才激活 apply；apply 内直接
+ * `ctx.sessionProjections` / `ctx.sessionProjectionCache` 读取。
+ * 官方先例：`@deepseek-ai/dsh-session-projection` 文档「domain plugins
+ * register under ctx.inject(['sessionProjections'], …)」。 */
+export const inject = ['sessionProjections', 'sessionProjectionCache']
+
 export { Config }
 export type { Options }
 
@@ -22,6 +29,12 @@ interface ProjectionRegistryLike {
   register(definition: unknown): () => void
 }
 
+/** Host 必选服务在 ctx 上的最小形状（不 import dsh 包，类型来自本地接口）。 */
+type HostServices = {
+  sessionProjections: ProjectionRegistryLike
+  sessionProjectionCache: SessionProjectionCacheLike
+}
+
 /**
  * Host 侧插件入口。
  *
@@ -29,6 +42,10 @@ interface ProjectionRegistryLike {
  * （src/history/fold.ts），由官方投影缓存持久化（$DSH_HOME/storages/
  * session_projcache.json），client 半区经 useProjection('history') 读取
  * 完整索引——不受对话窗口限制，重启后从缓存+尾部重放恢复。
+ *
+ * 依赖声明见 `inject`：`sessionProjections` / `sessionProjectionCache` 是
+ * 必选服务（fiber 等待齐备后才进入 apply，缺席不再静默跳过）；
+ * `sessionPersistence` 仍是可选服务（`ctx.get` 读取，headless 组装可缺席）。
  */
 export function apply(ctx: Context, config: Partial<Options> = {}): void {
   const options = normalizeOptions(config)
@@ -46,9 +63,8 @@ export function apply(ctx: Context, config: Partial<Options> = {}): void {
     }
   })
 
-  // 投影单元：仅在组合了 sessionProjections 注册表时激活（headless 组装不受影响）。
-  const sessionProjections = ctx.get('sessionProjections') as ProjectionRegistryLike | undefined
-  if (sessionProjections === undefined) return
+  // 必选服务（inject 声明保证 present，fiber 齐备后才进入本函数）：
+  const { sessionProjections, sessionProjectionCache } = ctx as unknown as HostServices
   sessionProjections.register({
     key: HISTORY_PROJECTION_KEY,
     schema: historyIndexSchema,
@@ -62,12 +78,12 @@ export function apply(ctx: Context, config: Partial<Options> = {}): void {
   // history 投影注册前已存在、之后从未打开的会话没有持久化缓存行 → 列表行投影
   // 缺 history → 左栏空态；coldSnapshot 是官方冷读补齐路径（缓存行+尾部重放 →
   // 重折叠 → fail-soft 写回），与「会话打开时自动补齐」同一机制，只是批量提前触发。
+  // sessionProjectionCache 已必选，此处只剩 sessionPersistence 需要判缺席。
   const persistence = ctx.get('sessionPersistence') as SessionPersistenceLike | undefined
-  const cache = ctx.get('sessionProjectionCache') as SessionProjectionCacheLike | undefined
-  if (persistence !== undefined && cache !== undefined) {
+  if (persistence !== undefined) {
     ctx.effect(() => {
       const controller = new AbortController()
-      void backfillMissingHistory({ persistence, cache, logger, signal: controller.signal })
+      void backfillMissingHistory({ persistence, cache: sessionProjectionCache, logger, signal: controller.signal })
         .catch((error: unknown) => logger.warn(`history backfill: 后台补齐意外失败: ${String(error)}`))
       return () => controller.abort()
     })

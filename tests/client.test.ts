@@ -44,11 +44,11 @@ function fakeCtx(sessions?: unknown) {
   return {
     registrations,
     ctx: {
-      get: (name: string) => {
-        if (name === 'slots') return slots
-        if (name === 'sessions' && sessions !== undefined) return sessions
-        return undefined
-      },
+      // 必选服务（inject 声明）直接暴露为属性：apply 不再用 ctx.get 读取它们。
+      slots,
+      ...(sessions !== undefined ? { sessions } : {}),
+      // 其余可选服务（timer 等）仍走 ctx.get，缺席返回 undefined。
+      get: () => undefined,
     },
   }
 }

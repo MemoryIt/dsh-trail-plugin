@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { apply, HISTORY_PROJECTION_KEY, HISTORY_PROJECTION_STATE_VERSION } from '../src/index.js'
+import { apply, inject, HISTORY_PROJECTION_KEY, HISTORY_PROJECTION_STATE_VERSION } from '../src/index.js'
 import type { LogEventLike } from '../src/history/fold.js'
 
 interface RegisteredProjection {
@@ -24,12 +24,24 @@ function fakeProjectionRegistry() {
   }
 }
 
+/** 默认会话投影缓存桩（必选服务，fake ctx 恒提供，测试可经 extra 覆盖）。 */
+function fakeProjectionCache() {
+  return {
+    cachedSnapshot: () => undefined,
+    coldSnapshot: async () => ({ asOfSeq: -1, values: {} }),
+  }
+}
+
 function fakeCtx(extra: Record<string, unknown> = {}) {
   const { registrations, registry } = fakeProjectionRegistry()
   const effects: Array<() => unknown> = []
   const ctx = {
+    // 必选服务（inject 声明）直接暴露为属性：apply 不再用 ctx.get 读取它们。
+    sessionProjections: registry,
+    sessionProjectionCache: extra.sessionProjectionCache ?? fakeProjectionCache(),
     logger: () => ({ info: () => {}, warn: () => {}, error: () => {} }),
-    get: (name: string) => (name === 'sessionProjections' ? registry : extra[name]),
+    // 可选服务（sessionPersistence 等）仍走 ctx.get。
+    get: (name: string) => extra[name],
     // 模拟 cordis ctx.effect：立即执行 setup 并记录，返回其 cleanup。
     effect: (fn: () => unknown) => {
       const cleanup = fn()
@@ -45,6 +57,10 @@ function ev(type: string, seq: number, data: Record<string, unknown> = {}): LogE
 }
 
 describe('host plugin 投影注册', () => {
+  it('声明 sessionProjections / sessionProjectionCache 为必选服务', () => {
+    expect(inject).toEqual(['sessionProjections', 'sessionProjectionCache'])
+  })
+
   it('apply 注册 key=history 的投影单元', () => {
     const { registrations, ctx } = fakeCtx()
     apply(ctx as never)
@@ -82,16 +98,7 @@ describe('host plugin 投影注册', () => {
     expect(schema.safeParse(view).success).toBe(true)
   })
 
-  it('sessionProjections 缺席时静默跳过（headless 组装不受影响）', () => {
-    const ctx = {
-      logger: () => ({ info: () => {}, warn: () => {}, error: () => {} }),
-      get: () => undefined,
-      effect: () => () => {},
-    }
-    expect(() => apply(ctx as never)).not.toThrow()
-  })
-
-  it('sessionPersistence / sessionProjectionCache 齐备时启动后台补齐', async () => {
+  it('sessionPersistence 齐备时启动后台补齐', async () => {
     const cold = vi.fn(async () => ({ asOfSeq: -1, values: { history: { nodes: [] } } }))
     const persistence = { list: async () => [{ id: 's1', createdAt: 0 }] }
     const cache = { cachedSnapshot: () => undefined, coldSnapshot: cold }
@@ -102,7 +109,7 @@ describe('host plugin 投影注册', () => {
     await vi.waitFor(() => expect(cold).toHaveBeenCalledWith('s1', expect.any(AbortSignal)))
   })
 
-  it('sessionPersistence / sessionProjectionCache 缺席时不注册补齐 effect', () => {
+  it('sessionPersistence 缺席时不注册补齐 effect', () => {
     const { effects, ctx } = fakeCtx()
     apply(ctx as never)
     expect(effects.length).toBe(1)

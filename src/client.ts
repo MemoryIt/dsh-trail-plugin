@@ -85,6 +85,8 @@ const SPIN_CSS = '@keyframes dsh-trail-spin { from { transform: rotate(0deg); } 
 /** cordis 插件入口（client 侧）。 */
 interface PluginEntry {
   name: string
+  /** 必选服务（fiber inject）：slots / sessions 齐备后才激活 apply。 */
+  inject: string[]
   apply(ctx: Context): void
 }
 
@@ -983,7 +985,8 @@ function createLeftColumn(
 
 /**
  * 浏览器 bundle factory：返回 cordis 插件入口。
- * 在 apply 里捕获 client sessions / timer 服务（fork / open / 跳转翻页用），
+ * `inject` 声明 slots / sessions 为必选服务（fiber 等待齐备后才进入 apply，
+ * 缺席不再静默跳过）；timer 仍是可选服务（ctx.get 读取，fork 等待/瞬态提示用），
  * 并把真左栏注册进官方 `shell.overlay` 浮层槽。
  */
 export default function factory(require: BundleRequire): PluginEntry {
@@ -995,10 +998,11 @@ export default function factory(require: BundleRequire): PluginEntry {
 
   return {
     name: PLUGIN_NAME,
+    inject: ['slots', 'sessions'],
     apply(ctx: Context) {
-      const slots = ctx.get('slots') as ClientSlots | undefined
-      if (slots === undefined) return
-      const sessions = ctx.get('sessions', false) as ClientSessions | undefined
+      // 必选服务（inject 声明保证 present）：
+      const slots = (ctx as unknown as { slots: ClientSlots }).slots
+      const sessions = (ctx as unknown as { sessions: ClientSessions }).sessions
       const timer = ctx.get('timer', false) as ClientTimer | undefined
       // 真左栏：shell.overlay 浮动列 + 内容让位 + 拖宽/记忆 + 行内跳转。
       slots.inject('shell.overlay', () => slots.register(
