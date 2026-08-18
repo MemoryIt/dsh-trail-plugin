@@ -1,161 +1,120 @@
-# dsh-trail
+# dsh-trail-plugin
 
-DeepSeek Harness（DSH）插件开发工程：Session Tree / History Index
-（给线性 Session 加上可索引、可跳转、可分叉的导航层，见 `DESIGN.md`）。
+DeepSeek Harness（DSH）插件：**Session Tree / History Index**——给线性会话日志加上
+可索引、可跳转、可分叉的导航层。
+
+npm 包名：`dsh-trail-plugin`（MIT）。
 
 ## 这是什么
 
-一个贴合 DSH 惯例的 Cordis 插件工程（M1：数据链路已接通）：
+DSH 的会话本质是一条线性滚动的对话日志：只能顺着往下看，找不到"刚才那轮说了什么"，
+更没法从某个历史节点继续。dsh-trail-plugin 在会话列表左侧加一个**历史索引栏**，把每个会话的
+事件日志折叠成**节点树**——每轮对话一个逻辑节点，行内显示摘要与文本，支持：
 
-- **Host 半区**（`src/index.ts`）：注册 `history` 投影单元，把每个会话的
-  SessionEvent 折叠为节点树；
-- **Client 半区**（`src/client.ts`）：经 `exports["./client"]` 导出，注册
-  `shell.overlay` 的真左栏（浮动列 + 内容让位 + 拖宽/记忆 + 行内跳转 +
-  fork 续写 + 谱系角标/下拉），经会话列表行投影 `projectionValues.history`
-  读取完整索引；
-- **纯逻辑层**（`src/history/`）：事件折叠、摘要、类型（与平台无关、可直接单测）；
-- **bundle 安装形态**（`cordis.patch.yml`）：包声明 `dsh.bundle.patch`，
-  `dsh plugin add` 后自动进 profile 的 bundles 层，组合行随 boot 插入，
-  不再需要手工 patch；
+- **行内跳转**：点击任意节点，直接跳到那轮对话在聊天流里的位置；
+- **续写（fork）**：从任意节点 fork 出新的子会话继续，不打断当前会话；
+- **分叉切换**：有分叉的节点带角标，展开共享会话下拉，一键切换；
+- **可拖宽、可折叠**：左栏宽度与折叠状态会被记住，刷新不丢。
 
-## 目录结构
+索引通过 DSH 官方投影通道持久化（`$DSH_HOME/storages/session_projcache.json`），
+重启后恢复，不受对话窗口已加载条数限制。
 
-```text
-.
-├── cordis.patch.yml      # bundle 层：dsh plugin add 安装后自动插入的组合行
-├── package.json          # 包声明：name、exports["./client"]、dsh.bundle + dsh.client（platform: web）
-├── tsconfig.json         # strict + NodeNext ESM
-├── vitest.config.ts
-├── scripts/
-│   ├── build-client.mjs  # esbuild 打包 client → 浏览器模块加载器 handoff
-│   └── smoke.sh          # 挂载验证（独立 trail-test profile 启动 DSH）
-├── src/
-│   ├── index.ts          # Host 插件入口：注册 history 投影单元
-│   ├── client.ts         # Client 插件入口（./client 子路径，factory(require)）
-│   ├── history/
-│   │   ├── types.ts      # 节点树共享类型（host 折叠 + client 渲染）
-│   │   ├── text.ts       # 摘要/文本提取工具（纯函数）
-│   │   ├── fold.ts       # 事件折叠：SessionEvent → 节点树（纯 reducer）
-│   │   └── schema.ts     # zod schema（host 侧，校验 view 输出）
-│   ├── options.ts        # 配置：类型 + schemastery Schema + normalizeOptions
-│   └── lib.ts            # 纯业务逻辑占位
-└── tests/
-    ├── history-fold.test.ts    # 事件折叠单测（turn 分组/摘要/fork 边界）
-    ├── host-projection.test.ts # host 投影单元注册与折叠
-    ├── client.test.ts          # client bundle factory + 视图渲染
-    ├── options.test.ts
-    ├── lib.test.ts
-    └── plugin-shape.test.ts    # 插件形状 + bundle 安装形态（patch/声明）校验
-```
+## 安装
 
-## 数据链路（M1，官方投影通道）
+### 前置要求
 
-```
-SessionEvent 日志（唯一事实来源，只读）
-  → host 投影单元 fold.ts 折叠为 per-session 节点树
-  → 官方投影缓存持久化（$DSH_HOME/storages/session_projcache.json）
-  → client 会话列表行投影 projectionValues.history 读取完整索引（不受对话窗口限制，重启恢复）
-```
+- DSH（`dsh` CLI 可用，profile 机制正常）
+- Node.js ≥ 20
 
-节点：`nodeKey`（turn）/ `parentKey`（树边）/ `boundarySeq`（turn/end seq，安全
-fork 边界）/ kind / 摘要 / 内联文本（有界）。交互：点击节点行内跳转查看
-（超出窗口自动翻页兜底），可续写节点提供「续写」（`sessions.fork` +
-`sessions.open`），分叉节点行首数字展开共享会话下拉。
-
-## 常用命令
+### 从 npm 安装（推荐）
 
 ```bash
-pnpm install     # 安装依赖
-pnpm typecheck   # 类型检查
-pnpm test        # 跑单测
-pnpm build       # tsc 构建 + esbuild 打 client bundle（lib/client.js）
-pnpm verify      # 类型检查 + 测试 + 构建 一条龙
+dsh plugin --profile web add dsh-trail-plugin
 ```
 
-## 发布到 npm
+> `--profile` 换成你实际使用的 profile 名（默认 GUI 是 `web`）。bundle 层改动需要
+> **整进程重启 DSH** 才生效，装完请重启。
 
-包形态已就绪（`main`/`exports["./client"]`/`types` 指向 `lib/`，`files` 只含
-`lib` + `cordis.patch.yml` + LICENSE，`dsh.bundle` 声明让 `dsh plugin add` 安装
-后自动进 bundles 层）。`prepublishOnly` 会在发布前自动跑 `pnpm verify`，保证
-`lib/`（gitignored）始终是新的。
+### 验证安装
 
-```bash
-# 一次性：登录 npm（需要有 npm 账号）
-npm login            # 或 pnpm login
+重启后看两处：
 
-# 每次发版：
-pnpm version patch   # 或 minor / major；也可手改 package.json
-pnpm publish         # 先自动 pnpm verify（typecheck + 测试 + build），再打包上传
-git push --tags
-```
+- 启动日志出现：`[I] dsh-trail [dsh-trail] hello world from dsh-trail-plugin (host)`
+  （日志里的 `dsh-trail` 是日志命名空间与默认 `label`，不是包名）
+- GUI 会话列表左侧出现「历史索引」左栏（含当前会话的节点树）
 
-发布前可先用 `pnpm pack` 生成 `dsh-trail-plugin-<version>.tgz` 检查包内容
-（`npm pack --dry-run` 只列出不生成）。包名 `dsh-trail-plugin` 已在 npm 确认可用。
+### 其他安装方式
 
-用户侧安装（与本地路径安装同一机制，只是从 registry 取预构建产物）：
-
-```bash
-dsh plugin --profile <name> add dsh-trail-plugin        # 从 npm
-dsh plugin --profile <name> add ./dsh-trail-plugin-0.1.0.tgz   # 从 tarball（无网络场景）
-```
-
-> git 安装（`add github:<owner>/<repo>`）会拿到源码而不是构建产物，需要包内
-> `prepare` 脚本（已有：`pnpm build`）且用户侧在 profile 的
-> `pnpm-workspace.yaml` 放行 `allowBuilds`——优先走 npm/tarball 分发预构建产物。
-
-## 挂载验证（smoke test）
-
-单测只能证明代码正确，**证明「DSH 启动时真的加载到了本插件」**要靠真实启动：
-
-```bash
-./scripts/smoke.sh
-```
-
-脚本做五件事（`DSH_BIN` / `DSH_HOME` / `PROFILE` 均可通过环境变量覆盖；
-容器内 dsh 必须以源码方式运行，默认 `pnpm --dir /app dsh`）：
-
-1. `pnpm build` 构建插件；
-2. `dsh plugin --profile trail-test add .` 以 **bundle 形态**装进独立测试
-   profile（默认 `trail-test`，与正式 GUI 的 `web` profile 隔离）——包声明
-   `dsh.bundle`，安装后自动进 `dsh.profile.bundles`，组合行由 bundle 层插入，
-   **无需手工写 profile 的 patch**；脚本只补 bundle 层不提供的 storage 栈与
-   console logger（web profile 里这些行来自 web-app bundle）；
-3. `dsh --profile trail-test --dump-config` 断言组合里恰好有一个
-   `id: dsh-trail-plugin` 行（来源为 `# == dsh-trail-plugin` bundle 层）；
-4. 启动 DSH 抓启动日志，断言出现
-   `hello world from dsh-trail-plugin (host)`。
-
-启动日志形如：
-
-```text
-[I] dsh-trail [dsh-trail] hello world from dsh-trail-plugin (host)
-```
-
-`ctx.logger('dsh-trail')` 的命名空间是日志第一段，`[dsh-trail]` 是配置里的
-`label` 前缀——说明 `config`（`enabled: true, label: dsh-trail`）被正确注入。
-
-> 要把插件挂进正式 GUI（`web` profile，即本机 3080 端口那个）：
-> `dsh plugin --profile web add <本仓库路径>`（或 `add link:/绝对路径`），
-> 确认 `--dump-config` 出现 bundle 层行，然后重启 GUI。
-> 重启会中断当前会话，开发期建议先用 `trail-test` profile 验证。
-
-## 骨架遵循的 DSH 约定
-
-| 项 | 约定 | 依据 |
+| 方式 | 命令 | 说明 |
 | --- | --- | --- |
-| 包形态 | ESM，`main: lib/index.js`，`exports` 带 `./client` 子路径 | DSH 各包（如 `@deepseek-ai/dsh-client-modules`） |
-| 插件形状 | 具名导出 `name` / `Config` / `apply(ctx, config)` | 如 `@deepseek-ai/dsh-hooks-claude-code` |
-| 配置校验 | schemastery `z.object({...})`，`z<Options>` 标注 | 同上 |
-| Client 声明 | package.json `dsh.client: { platform: "web", ... }` | `packages/client/modules` 扫描逻辑 |
-| 日志 | `ctx.logger('name')`，核心服务无需 inject | cordis 4 核心混入 |
-| 副作用 | `ctx.effect(() => () => {})` 保证停止/更新时清理 | cordis 4 Fiber |
+| npm tarball | `dsh plugin --profile web add ./dsh-trail-plugin-0.1.0.tgz` | 无网络/内网场景 |
+| git | `dsh plugin --profile web add github:MemoryIt/dsh-trail-plugin` | 需在 profile 的 `pnpm-workspace.yaml` 放行 `allowBuilds` |
+| 本地源码 | `dsh plugin --profile web add /path/to/dsh-trail-plugin` | 开发调试用 |
 
-## 下一步（选定功能后）
+## 使用
 
-1. 在 `src/index.ts`（Host）或 `src/client.ts`（Client）填入真正的功能；
-   Host 侧可用 `cordis_inspect_query` 确认 Service / Event / Tool 接口后再写；
-   Client 侧先 `Slots.listSubTree` 选定目标 Slot，再 `slots.inject` + `slots.register`。
-2. 把新增纯逻辑放进 `src/lib.ts`（或拆分模块）并补单测。
-3. 挂载验证用 `./scripts/smoke.sh`（独立 `trail-test` profile）；
-   确认要进正式 GUI 时再装进 `web` profile 并重启。
-4. 需要 React UI 时再引入 `react`（DSH web 用 React 18）与 `@types/react`。
+安装并重启后，进入任意会话，左侧即是「历史索引」：
+
+- **节点行**：每个逻辑节点对应一轮对话，显示摘要；行尾「续写」按钮在鼠标悬停时出现。
+- **跳转**：点击节点行，聊天流自动滚动到该轮（目标在未加载的历史里时自动加载更早
+  内容；目标无独立气泡时定位到邻近内容；失败会给出原因提示）。
+- **续写**：悬停节点行，点「续写」，从该节点 fork 出子会话并自动打开。
+- **分叉切换**：有分叉的节点行首显示数字角标，点击展开共享会话下拉（子会话摘要 +
+  切换），可跳去任意分支查看/续写。
+- **拖宽 / 折叠**：拖动左栏右缘调整宽度（240–480px）；点左栏右上角 `<-` 折叠，
+  折叠后点对话区左上角的 `->` 展开。宽度与折叠状态会被记住。
+
+## 配置
+
+插件配置通过 profile 的用户层 patch（`$DSH_HOME/profiles/<name>/cordis.patch.yml`）
+覆盖。可配置项：
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否启用插件 |
+| `label` | `dsh-trail` | 日志与标识前缀 |
+
+示例（覆盖同 id 行时需要写全其余字段）：
+
+```yaml
+- id: dsh-trail-plugin
+  name: dsh-trail-plugin
+  config:
+    enabled: true
+    label: my-trail
+```
+
+## 工作原理（摘要）
+
+会话事件日志（唯一事实来源，只读）→ host 投影单元折叠为每会话节点树 → 官方投影
+缓存持久化 → 浏览器端左栏读取并渲染。插件不改写任何会话数据，续写走 DSH 官方
+`sessions.fork` 接口。架构细节见 [DESIGN.md](DESIGN.md)。
+
+## 常见问题
+
+- **刷新后左栏"消失"了？** 多半是处于折叠态：折叠按钮是一个贴在对话区左上角的
+  `->` 半圆，点击即展开（折叠态会被记住）。
+- **点击跳转提示「聊天视图未激活」？** 当前在 Trajectory 等非聊天视图，手动切回
+  「对话」视图再试。
+- **提示「目标节点未加载或不存在（可能已压缩）」？** 该轮内容已被官方压缩清理，
+  无法定位到独立气泡，会尝试定位到邻近内容。
+- **提示「加载历史超时」？** 历史过深（数千条），可重试。
+- **某些旧会话没有索引？** 只有 `session.jsonl.zstd` 压缩日志的极旧会话不在补齐
+  范围内；有 `log.jsonl` 的会话均会补齐。
+- **会不会改动我的会话数据？** 不会。插件只读事件日志，写路径只有官方
+  `sessions.fork`（创建新会话）。
+
+## 开发者
+
+开发、测试、挂载验证与发布流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；架构与设计取舍
+见 [DESIGN.md](DESIGN.md)。常用命令：
+
+```bash
+pnpm install           # 安装依赖
+pnpm verify            # typecheck + 测试 + 构建 一条龙
+./scripts/smoke.sh     # 挂载验证（独立 trail-test profile 启动 DSH）
+```
+
+## License
+
+MIT
