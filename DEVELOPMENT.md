@@ -37,7 +37,7 @@
 - **git/分支状态**：main 领先 `origin/main` **5 个提交（未 push）**（`7daec7d` 半圆按钮 + `544056d` merge + `df49aa8` 交接文档 + `084507d`/`fdaae76` host 缓存补齐）。本地分支：`feature/expand-button-shape` / `feature/left-column` / `feature/left-column-interactions` / `feature/host-backfill`（均已 no-ff 合并回 main，保留）、`feature/plugin-skeleton`（历史）、**`feature/remove-history-tab`**（已 no-ff 合并回 main `480db5a`）、**`feature/required-capabilities` = 当前分支**（领先 main **2 个提交未 push/未合并**：`a3ba0ee` 能力必选化 + `5db5aa6` 跳转扩窗重写，109 测试全绿、smoke 通过）、**`feature/narrow-auto-collapse` = 破坏性分支**（上次开发破坏了左栏功能后被放弃回退，**勿在其上继续开发**，保留仅作参考）。开发约定：中文 commit + 左栏 scope（`feat/fix/style/docs(left-column): …`，host 侧用 `feat(host)`）、特性合并回 main 一律 **no-ff**、feature 分支合并不删。
 - **待办**：① **host 侧补齐缺 history 的投影缓存** — ✅ 已实现并 GUI 实测通过（`src/backfill.ts` 启动后台顺序冷读补齐 + `src/index.ts` 接线，幂等/可中断；已 no-ff 合并回 main `fdaae76`）；③ **旧 tab 去留** — ✅ 已移除（`feature/remove-history-tab`：删除 `conversation.view` 注册与 `createHistoryView` 整块，保留左栏共享的 `toLineageSessions`/接口/`history/*`；**client 改动刷新即生效无需重启**）；② 左栏交互补全剩 **窄屏自动折叠**（阈值触发，拖拽钳制已就位）+ 跳转高亮 polish；④ M5 二级完整路径。
 - **验证约定**：client bundle 的 rev = 文件 sha1 前 12 位；**实测 web 服务器按请求实时计算 manifest**（`pnpm build` 后浏览器刷新即可见，无需重启 GUI——旧记录"重启才进 boot manifest"已过时）。**注意 curl 首查可能命中 index.html 缓存返回旧 rev，加 cache-buster（`?cb=$(date +%s%N)`）再查**。host 侧（src/index.ts）改动仍需重启 GUI 生效。
-- 环境：DSH 源码在 `/app`（只读参考，禁止修改）；`DSH_HOME=/data/dsh-home`；GUI 在 `127.0.0.1:3080`；dsh CLI 用 `node /app/apps/cli/lib/bin.js`。
+- 环境：DSH 源码在 `/app`（只读参考，禁止修改）；`DSH_HOME=/data/dsh-home`；GUI 在 `127.0.0.1:3080`；dsh CLI 在容器内只能以源码方式运行：`pnpm --dir /app dsh <args>`（等价 `node --import tsx/esm apps/cli/src/bin.ts`）。
 
 ## 2. 架构决策（含理由，勿轻易推翻）
 
@@ -70,7 +70,7 @@
 - **槽位**：`conversation.view` 是 list、可添加（replaceRisk none），注册 `{name, id, order, label}` + 组件；标准 props 含 `useSessions/useProjection/sessionId`。client slots 服务经 `inject` 必选后直读 `ctx.slots`（slots.inject + slots.register；官方 ui-* 插件同款）。**本插件已不再注册 `conversation.view`**（tab 已移除），只注册 `shell.overlay`（id `dsh-trail-left-column`，order 10）。
 - **缓存冷读阶梯（host 补齐用，本轮实测确认）**：`sessionPersistence.list(signal?)` → `SessionHeader[]`（轻量 meta 列举，不解析 log）；`sessionProjectionCache.cachedSnapshot(meta)` 同步零 I/O（identity 校验 + `viewCheckpoint` 只服务 version 匹配的 key）；`coldSnapshot(id, signal?)` 异步冷读（缓存行 + `readFrom` 尾部重放 → registry `restore` 重折叠 → `putSoft` fail-soft 写回）；`restoreFloor` 算出重放起点——version 不匹配/超界的行被丢弃，若 floor>0 则整段从 seq0 重读（coldSnapshot 内部已处理）。`sessionProjectionCache` 服务 `requireTable()` 在 `[Service.init]` 完成后才可注入——`ctx.get` 拿到即已就绪。
 - **ctx.effect 语义（本轮接线与测试确认）**：cordis `ctx.effect(fn)` **立即执行** setup、返回其 cleanup（插件停止/更新时调用）。测试 fakeCtx 的 `effect` 桩必须模拟立即调用 + 记录 cleanup，才能测到「注册即触发」的异步行为（如 backfill 启动）。
-- **挂载**：`dsh plugin --profile <name> add <路径>`（pnpm link 进 profile）；组合行写 `$DSH_HOME/profiles/<name>/cordis.patch.yml`（`- id / name / config`）；Loader 以 profile 目录为 baseUrl；client 半区经 package.json `dsh.client {platform:'web'}` + `exports["./client"]` 进浏览器 roster，URL `/plugins/@deepseek-ai/<包名>/client.js?rev=…`。
+- **挂载（bundle 形态）**：`dsh plugin --profile <name> add <路径>`（pnpm link 进 profile；容器内用 `pnpm --dir /app dsh plugin ...`）。包声明 `dsh.bundle.patch`（→ `./cordis.patch.yml`，顶层是 patch 数组、`- insert:` 内行 `name` = **包名**）即自动进 profile 的 `dsh.profile.bundles`，boot 时 bundle 层自动插入组合行——**不再手工写 profile 的 `cordis.patch.yml`**（那里只放用户层覆盖；bundle 行 + 用户层同 id 重复插会 `duplicate loader entry id`）。改包名后旧依赖键要 `plugin remove` 清掉，否则旧键同样声明 dsh.bundle、双份进 bundles 层。Loader 以 profile 目录为 baseUrl；client 半区经 package.json `dsh.client {platform:'web'}` + `exports["./client"]` 进浏览器 roster，URL `/plugins/dsh-trail-plugin/client.js?rev=…`。
 - **client bundle 契约**：`window.__ModuleLoader__.load({id: 包名, factory(require)})`；factory 返回 `{name, apply}`；模块表含 react / @deepseek-ai/cordis / @deepseek-ai/dsh-client-ui-slots 等。
 - **会话快照访问（跳转/分页用）**：`ctx.sessions.binding(id)?.session` = `SessionFace` = `ISession & ObservableSnapshot<ConversationSnapshot>`。`loadOlder()` 是 **ISession 动词**（无需 scope().get('conversation')）；每页 `PAGE_MESSAGES=50` 条，守卫 `openState==='open' && hasMore && !loadingOlder`（不满足时静默 no-op），prepend 后快照同步更新。快照结构：`chat.nodes`（ChatNodeStore：`get(key)`/`values()`）、`chat.order`、`hasMore`、`loadingOlder`、`openState`；聊天节点 `location` = `{kind:'turn'|'step', turn: TurnLocation}`（turn 号与历史节点对齐，fork 前缀拷贝保留）。
 - **DOM 锚点（跳转落点）**：聊天行 `data-chat-anchor-key`（= 快照节点 key，ChatView 内部滚动恢复也用同一属性）；`[data-chat-flow]` = 聊天视图容器（判断视图是否挂载）；滚动口 `[data-conversation-scroll]`（scrollBody）。`scrollIntoView({block:'start'})` 即滚到官方滚动口。
@@ -86,7 +86,7 @@
 - **`[data-chat-flow]` = ChatView 挂载标记（视图激活判定用它，勿用 `[data-conversation-scroll]`）**：`data-chat-flow` 在 ChatView 的 column 上（`ChatView.tsx:368`），仅聊天视图挂载时存在（切 trajectory / hero / 会话未绑定时没有）；`[data-conversation-scroll]` 在 ConversationRoot 上**无条件渲染**（hero 态也在），用它判激活会误判。`data-chat-anchor-key` 与 `data-chat-flow-key` 同值同元素（`ChatNodeSeat.tsx:44-46`），跳转只需认 anchor。
 - **官方无 O(1) 跳窗 API（深历史只能逐页）**：`session.history` 请求只有 `beforeSeq`/`maxMessages`（`host/apiproxy/src/api/sessions.schema.ts:141`，无 afterSeq）；`installWindow`/`replaceWindow`/`api`/`private history` 全是 Session 私有成员（`client/runtime/src/client/sessions/session.ts`）；`PAGE_MESSAGES=50` 是 client 内部常量。**禁止**自造 history RPC 或触碰私有窗口替换——逐页 `loadOlder()` 是唯一官方扩窗通道（守卫 `openState==='open' && hasMore && !loadingOlder`）。
 - **compaction 是 surface replace（被压缩 turn 官方不保留）**：`core/session/src/index.ts:713`——compaction 从 log **删除**被压缩事件（替换为 `compaction/start` → `compaction/summary` → 带 `surfaceOp:{op:'replace'}` 的替换 user/message → `compaction/end`，`compaction/compaction/src/types.ts:23-91`）；`compaction/summary` 携带 `shadowedRange:{start,end}`/`shadowedSeqs`/`summary` 文本；chat 侧压缩区显示 compaction card，**任何 UI（含官方）都看不到原事件**。host history 分页按消息边界对齐，compaction 记录与替换消息同页（`api/sessions.ts:268`）。当前 66 会话实测 0 个含 compaction 事件（低频边界）。
-- **组合行行级 inject 也可声明必选服务**：`cordis.yml` 行可带 `inject:` 字段（`EntryOptions.inject`，`vendor/loader/src/config/entry.ts:21`），loader 在 `internal/plugin` 时 `Inject.resolve(fiber.entry.options.inject, fiber.inject)` 合并进 fiber（`vendor/loader/src/index.ts:122`）——与模块级 `export const inject` 等效（都进同一个 fiber inject map），两种声明方式可二选一。
+- **组合行行级 inject 也可声明必选服务**：组合行（`cordis.patch.yml` / bundle 插入的行）可带 `inject:` 字段（`EntryOptions.inject`，`vendor/loader/src/config/entry.ts:21`），loader 在 `internal/plugin` 时 `Inject.resolve(fiber.entry.options.inject, fiber.inject)` 合并进 fiber（`vendor/loader/src/index.ts:122`）——与模块级 `export const inject` 等效（都进同一个 fiber inject map），两种声明方式可二选一。
 - **会话窗口刷新后重置为 tail 页**：刷新后 `session.open()` 只拉尾页（`doOpen` → `installWindow`），会话窗口是内存态（`chatScrollPositions`/conversation store 不持久化）——旧节点跳转必然走翻页路径；`dsh.sessions.current`（localStorage）持久化上次选中会话并自动重开（`sessions/service.ts:287`）。
 
 ## 4. 验证配方
@@ -97,7 +97,9 @@ pnpm verify                        # typecheck + vitest + build（build 含 esbu
 # trail-test 必须同装 sessionProjectionCache 及其 storage 栈（storage/storage-json/storage-domain，
 # 配置与 web-app bundle 一致）——scripts/smoke.sh 已内置；缺它会 boot 失败 loud
 # `dsh-trail-plugin: pending (waiting for service: sessionProjectionCache)`。
-DSH_BIN='node /app/apps/cli/lib/bin.js' ./scripts/smoke.sh
+./scripts/smoke.sh
+# 等价显式写法（容器内 dsh 只能源码方式运行）：
+# DSH_BIN='pnpm --dir /app dsh' ./scripts/smoke.sh
 # 直接查运行中 host 的会话列表（含每会话投影与 fork 父）：
 curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: application/json' \
   -d '{"type":"client-request","rpcId":"p","method":"session.list","payload":{}}'
