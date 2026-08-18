@@ -1,10 +1,12 @@
 # DEVELOPMENT.md — dsh-trail-plugin 开发上下文（会话交接用）
 
 > 本文件浓缩 2026-08-16（M1–M4 数据链路）+ 2026-08-17（真左栏 feature/left-column）+
-> 2026-08-17（左栏交互 feature/left-column-interactions，已 no-ff 合并回 main）三轮开发对话的
+> 2026-08-17（左栏交互 feature/left-column-interactions，已 no-ff 合并回 main）+
+> 2026-08-17（半圆按钮 feature/expand-button-shape，已 no-ff 合并回 main）+
+> 2026-08-17（交接核查：回退破坏性分支 + 补全官方层叠/结构调研）五轮开发对话的
 > 后续开发所需信息。
 > 代码变更历史见 git log（`b32e2ba` 起，里程碑：skeleton → M1–M4 → 左栏 spike/拖宽/跳转/渲染协调 →
-> 分叉交互 → 行精简 → 分支列表 → 背景统一 → 跳转指示 → header 对齐 → 折叠按钮）。
+> 分叉交互 → 行精简 → 分支列表 → 背景统一 → 跳转指示 → header 对齐 → 折叠按钮 → 半圆按钮）。
 > 详细设计见 `DESIGN.md`（Session Tree / History Index 插件）。
 
 ## 1. 当前状态
@@ -18,7 +20,8 @@
   - **背景统一**——左栏 panel 与 tab 面板 `bg-layer-1` → `bg-base`（官方主表面惯例），展开体去线框（缩进即区分）；
   - **标题区分隔线对齐官方会话 header**——左栏标题区复刻官方两段式（titleRow 32 + 类 tabs 行 27，节点计数占位），分隔线落 75px 与右侧对话区平齐（box-sizing 坑见 §5）；
   - **折叠按钮重构**——移除 28px 竖向 rail，折叠态面板 0 宽，☰ 展开按钮作为 Fragment 兄弟悬浮，与 header「«」关于分割线镜像对称（见 §2）。
-  - **半圆按钮重构**（feature/expand-button-shape）——折叠按钮 `<-` 配**左半圆**、展开按钮 `->` 配**右半圆**：两半圆**同半径 r=10（20×20）、gap 0 紧贴各自边缘**——折叠态右半圆直径边贴对话区内容左缘（恰好落在官方 header 左 padding 20px 区内，不压标题）、展开态左半圆直径边贴面板右缘（header 右 padding 0）——直径边都对着内容左缘、弧朝外，视觉拼成一个整圆；垂直中心 = titleRow 中心 y=28（translateY(-50%) 精确定心）；hover 高亮勾勒半圆 + title 描述；两按钮互斥出现，共用 `railHovered`（见 §2 决策表）。
+  - **半圆按钮重构**（feature/expand-button-shape）——折叠按钮 `<-` 配**左半圆**、展开按钮 `->` 配**右半圆**：两半圆**同半径 r=10（20×20）、gap 0 紧贴各自边缘**——折叠态右半圆直径边贴对话区内容左缘（恰好落在官方 header 左 padding 20px 区内，不压标题）、展开态左半圆直径边贴面板右缘（header 右 padding 0）——直径边都对着内容左缘、弧朝外，视觉拼成一个整圆；垂直中心 = titleRow 中心 y=28（translateY(-50%) 精确定心）；hover 高亮勾勒半圆 + title 描述；两按钮互斥出现，共用 `railHovered`（见 §2 决策表）。**GUI 实测通过**（用户确认无问题），已 no-ff 合并回 main（`7daec7d` + merge `544056d`），91 测试全绿。
+- **git/分支状态**：main 领先 `origin/main` **2 个提交（未 push）**。本地分支：`feature/expand-button-shape`（已合并，保留）、`feature/left-column` / `feature/left-column-interactions`（已合并，保留）、`feature/plugin-skeleton`（历史）、**`feature/narrow-auto-collapse` = 破坏性分支**（上次开发破坏了左栏功能后被放弃回退，**勿在其上继续开发**，保留仅作参考）。开发约定：中文 commit + 左栏 scope（`feat/fix/style/docs(left-column): …`）、特性合并回 main 一律 **no-ff**、feature 分支合并不删。
 - **待办**：① **host 侧补齐缺 history 的投影缓存**（25/45 会话缺，见 §3 机制与 §7 方案，需重启 GUI）；② 左栏交互补全剩 **窄屏自动折叠**（阈值触发，拖拽钳制已就位）+ 跳转高亮 polish；③ 旧 tab 去留；④ M5 二级完整路径。
 - **验证约定**：client bundle 的 rev = 文件 sha1 前 12 位；**实测 web 服务器按请求实时计算 manifest**（`pnpm build` 后浏览器刷新即可见，无需重启 GUI——旧记录"重启才进 boot manifest"已过时）。**注意 curl 首查可能命中 index.html 缓存返回旧 rev，加 cache-buster（`?cb=$(date +%s%N)`）再查**。host 侧（src/index.ts）改动仍需重启 GUI 生效。
 - 环境：DSH 源码在 `/app`（只读参考，禁止修改）；`DSH_HOME=/data/dsh-home`；GUI 在 `127.0.0.1:3080`；dsh CLI 用 `node /app/apps/cli/lib/bin.js`。
@@ -56,6 +59,10 @@
 - **列表行投影管线（client）**：`session.list` 响应行带 `projections`（host 组装：live 用 `sessionProjections.snapshot()`，cold 用 `sessionProjectionCache.cachedSnapshot()`，失败/空则整块缺席）；client manager 逐 key `store.apply(key, value, asOfSeq)` 进 per-session `projectionStores`（higher-seq-wins），列表行 `projectionValues` = store.values()。**列表行投影 ≠ 会话作用域 `useProjection`**（后者是 per-session 完整投影通道）。
 - **current 的 masked gap**：`projectList` 中 selected 会话暂不在 items（如切换间隙）→ `current=undefined`（UI 呈 hero 态、左栏隐藏），会话回列表后自动回填——是官方瞬态，非 bug。
 - **useSessions 底层**：`useSyncExternalStoreWithSelector`（`packages/client/web-react/src/bind.ts`），默认 Object.is 相等；root scope 同样有 useSessions 且 state 含 `current`（SessionListState）。
+- **shell.overlay 层叠结构（AppFrame.module.css，半圆按钮调研结论）**：`.overlayLayer { position:absolute; inset:0; z-index:20; pointer-events:none }` + `.overlayLayer > * { pointer-events:auto }`；对话区列 `.centerCol` **z-index auto** → 对话区整体（含其内部 z-index 1/7/8/100 的 sticky 元素）都在 overlayLayer(z-20) 之下——**任何对话区重绘都不可能盖住 overlay 内元素**（若看到"按钮被对话区覆盖"，先查按钮是否真的在 overlayLayer 内/是否渲染）。frame 有 `overflow:hidden`（overlay 内元素超出 frame 会被裁剪）。
+- **slot outlet 锚点容器**：每个槽位渲染包 `<div data-slot="<key>">`，`display: contents`（web-react scoped-slots.tsx `ANCHOR_STYLE`）——布局中性、不产生盒子，absolute 子元素的包含块上溯到 positioned 祖先（shell.overlay 即 overlayLayer），frame 坐标系成立；`display: contents` 不拦截指针事件。
+- **官方对话区 header 结构（ConversationRoot.module.css）**：`header { padding: 12px 28px 0 20px }`；titleRow min-height 32（垂直范围 [12,44]，中心 y=28）；titleCluster flex:1 从内容左缘 **+20px** 开始——**左 padding 20px 是空留白，可安全叠加覆盖元素**（半圆按钮折叠态即嵌此区）；header::after 分隔线 z-index 0 pointer-events none。
+- **官方 primitives 图标全清单**：`IconCheckOutline16 / IconChevronDownOutline14 / IconCloseOutline16 / IconCopyOutline16 / IconWarningOutline16`（`packages/client/ui-primitives/src/`）——**没有 hamburger/panel/箭头图标**，左栏按钮类图标必须自绘（半圆按钮用 CSS border-radius 自绘即因此）。
 
 ## 4. 验证配方
 
@@ -87,7 +94,7 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
 })()
 ```
 
-判读：`overlaySlot` 缺 → 条目未注册；折叠态时 panel 0 宽（`panelStyle.width` 为 "0px"），应看到悬浮 ☰ 展开按钮（Fragment 兄弟，`expandButtonRef` 位置由 applyLayout 折叠分支设置）；`panelStyle.left/height` 异常（0/0）或 convPadding 空但面板在 → 几何未定位（渲染协调问题，见 §2）。
+判读：`overlaySlot` 缺 → 条目未注册；折叠态时 panel 0 宽（`panelStyle.width` 为 "0px"），应看到 **-> 右半圆展开按钮**（Fragment 兄弟，直径边贴对话区左缘，`expandButtonRef` 位置由 applyLayout 折叠分支设置；展开态则在 panel header 右端见 `<-` 左半圆）；`panelStyle.left/height` 异常（0/0）或 convPadding 空但面板在 → 几何未定位（渲染协调问题，见 §2）。
 
 ## 5. 踩坑记录
 
@@ -102,6 +109,9 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
 - **curl manifest 缓存时序**：`pnpm build` 后 curl 首页首次可能命中 index.html 缓存返回旧 rev，加 cache-buster（`?cb=$(date +%s%N)`）再查即为新 rev——以 sha1(lib/client.js) 前 12 位为准。
 - **会话切换后左栏消失/竖条漂移 = 引用过期**：conversation 槽位会话切换重挂载（DOM 节点替换），layout effect 闭包若缓存节点引用 → RO 观察 detached 节点永不触发、几何读取全 0。修复组合：effect deps 含 current + 每次实时查询节点 + 几何未就绪 rAF 重试（≤20 帧）+ 250ms 漂移轮询 + panelStyle 初始 height:100%。**改几何逻辑时务必保持这套防御**。
 - **RO 对 grid 列过渡（侧栏开合）时序不可靠**：开侧栏触发、关侧栏可能漏触发 → 位置漂移。250ms 漂移轮询兜底（对比 panel.left 与会话列左缘，漂移>1px 重新定位；拖拽中跳过）。
+- **折叠态按钮锚点教训（半圆按钮重构）**：折叠态展开按钮若锚定"虚拟分割线 = 对话区左缘 + 记忆宽度"→ 按钮悬在对话区中间（远离左缘，易被误判为漂移 bug）。正确锚定 = **对话区内容左缘**（`left = convRect.left − frameRect.left`，不再加 widthRef），gap 0 恰好落在官方 header 左 padding 20px 区内、不压标题。
+- **拖拽手柄抢占紧贴右缘的按钮**：拖宽手柄（`right:0; width:8; zIndex:2`）覆盖面板右缘 8px——折叠按钮若 gap 0 贴右缘（r=10 宽 20），右 8px（40%）点击会被手柄抢走（触发拖拽而非折叠）。**按钮必须 `zIndex: 3`（> 手柄 2）**或留出间距。
+- **git merge 偶发 `fatal: stash failed`**：曾出现一次（工作区干净、无自定义 hooks），重试即成功——环境偶发，遇此直接重试 merge。
 
 ## 6. 代码结构约定
 
@@ -111,6 +121,7 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
 - **左栏组件返回 Fragment**：`[panel div（折叠 0 宽）, collapsed ? -> 右半圆展开按钮 : null]`——展开按钮必须为 Fragment 兄弟（panel overflow:hidden）；折叠态位置由 `applyLayout` 折叠分支计算（`left = convRect.left − frameRect.left + EXPAND_BUTTON_DIVIDER_GAP(0)`——贴对话区内容左缘，不再加记忆宽度；`top = convTop + CENTER_Y` + 垂直定心走 `transform: translateY(-50%)`）；展开态折叠按钮 `<-` 左半圆在 header titleRow 右端（header 右 padding 0 = gap 0 贴面板右缘，`zIndex: 3` 盖过拖拽手柄）。两按钮互斥、共用 `railHovered`，**无新增 state**。
 - **左栏 useState 调用序（fakeReact 注入序，勿打乱）**：`prefs(0) → lineageOpen(1) → hoveredRow(2) → hoveredBranch(3) → jumpingNodeKey(4) → handleHovered(5) → railHovered(6) → dragging(7) → hint(8)`。测试用 `fakeReact([...states])` 按调用序注入初始值——**新增 state 必须追加在末尾**，否则现有测试注入错位。
 - 测试 `tests/*.test.ts`，import `../src/*.js`；bundle 安全（client 不 import zod、不 import node 内置）；**client.ts 用 DOM API（document/window/ResizeObserver/requestAnimationFrame）**，tsconfig lib 已含 DOM。渲染树断言 helper：`findByKey/findByText`（props）、`findElementByKey/findElementByTitle`（完整元素含 children，结构断言用）。
+- **半圆按钮相关约定**：几何常量 `EXPAND_BUTTON_RADIUS=10 / CENTER_Y=28 / DIVIDER_GAP=0` 定义在 `createLeftColumn` 内 `expandButtonStyle` 之前（样式定义区，勿移到组件外）；测试断言：折叠态测试断言「展开历史索引」+ `->` + Fragment 2 子元素（面板 0 宽/无 borderRight），展开态测试断言「折叠左栏」+ `<-` + 无 `->`（`tests/client.test.ts`）。
 
 ## 7. 下一步（按数据就绪度）
 
@@ -122,7 +133,7 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
    a. ~~点击节点行内跳转~~（完成：`src/jump.ts` 纯映射 + 左栏行 onClick；落点=轮首用户行；**超出已加载窗口自动 `session.loadOlder()` 逐页翻页**（每页 50 条，上限 20 页；hasMore/openState/窗口起点三重守卫防空转）；翻页后轮询等行渲染进 DOM（4s 超时）；失败提示：聊天视图未激活 / 目标节点未加载或不存在）。
    b. ~~fork 续写入口迁移到左栏行~~（完成：行尾「续写」按钮 hover 显现（opacity/pointerEvents 随行 hover 态），点击 `sessions.fork({sessionId: current, atSeq: boundarySeq, increaseTitle: true})` → `open(childId)`，失败走 showHint 瞬态提示；进行中节点不渲染按钮）。
    c. ~~谱系角标/下拉迁移~~（完成：左栏新增全量 `useSessions` selector → `toLineageSessions` → `buildHistoryIndex` → **行首分叉数字**（hover/展开变官方 chevron）点击展开共享会话下拉（叶子摘要 + 切换）；展开体是**行下方 column 兄弟**（复刻官方 DisclosureRow 骨架，marginLeft 20 缩进，不再作为行内 flex item——修复撑高/挤占 bug）；`lineageForNode` 复用，`src/history/*` 零改动）。
-   d. **窄屏自动折叠**：convRoot 宽度低于阈值（约 MIN_CHAT + MIN 列宽）自动折叠（拖拽钳制已就位，仅差阈值触发）。
+   d. **窄屏自动折叠**：convRoot 宽度低于阈值（约 MIN_CHAT + MIN 列宽）自动折叠（拖拽钳制已就位，仅差阈值触发）。**半圆按钮已就位**（折叠态 -> 右半圆贴对话区左缘、展开态 <- 左半圆贴面板右缘），阈值触发逻辑补上即可完整。
    e. 已知边界：非聊天视图（trajectory/旧 tab）无法编程切换（chatStore 私有）→ 提示用户手动切回；超深历史（>20 页）放弃并提示；跳转高亮留待 polish。
 2. **旧 tab 去留**：左栏稳定后移除 `conversation.view` 注册（或加配置项 A/B）。
 3. **M5 二级完整路径**：数据已全在 client（每会话完整节点路径），基本是 UI。
