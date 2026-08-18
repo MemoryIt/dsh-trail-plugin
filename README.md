@@ -14,14 +14,16 @@ DeepSeek Harness（DSH）插件开发工程：Session Tree / History Index
   fork 续写 + 谱系角标/下拉），经会话列表行投影 `projectionValues.history`
   读取完整索引；
 - **纯逻辑层**（`src/history/`）：事件折叠、摘要、类型（与平台无关、可直接单测）；
-- **挂载示例**（`cordis.yml`）：展示插件如何作为组合行进入 DSH 组合。
+- **bundle 安装形态**（`cordis.patch.yml`）：包声明 `dsh.bundle.patch`，
+  `dsh plugin add` 后自动进 profile 的 bundles 层，组合行随 boot 插入，
+  不再需要手工 patch；
 
 ## 目录结构
 
 ```text
 .
-├── cordis.yml            # 组合行示例（dsh web --patch / agent preset 用）
-├── package.json          # 包声明：exports["./client"]、dsh.client（platform: web）
+├── cordis.patch.yml      # bundle 层：dsh plugin add 安装后自动插入的组合行
+├── package.json          # 包声明：name、exports["./client"]、dsh.bundle + dsh.client（platform: web）
 ├── tsconfig.json         # strict + NodeNext ESM
 ├── vitest.config.ts
 ├── scripts/
@@ -43,7 +45,7 @@ DeepSeek Harness（DSH）插件开发工程：Session Tree / History Index
     ├── client.test.ts          # client bundle factory + 视图渲染
     ├── options.test.ts
     ├── lib.test.ts
-    └── plugin-shape.test.ts    # 插件形状 + cordis.yml 结构校验
+    └── plugin-shape.test.ts    # 插件形状 + bundle 安装形态（patch/声明）校验
 ```
 
 ## 数据链路（M1，官方投影通道）
@@ -75,16 +77,20 @@ pnpm verify      # 类型检查 + 测试 + 构建 一条龙
 单测只能证明代码正确，**证明「DSH 启动时真的加载到了本插件」**要靠真实启动：
 
 ```bash
-DSH_BIN='node /app/apps/cli/lib/bin.js' ./scripts/smoke.sh
+./scripts/smoke.sh
 ```
 
-脚本做四件事（`DSH_BIN` / `DSH_HOME` / `PROFILE` 均可通过环境变量覆盖）：
+脚本做五件事（`DSH_BIN` / `DSH_HOME` / `PROFILE` 均可通过环境变量覆盖；
+容器内 dsh 必须以源码方式运行，默认 `pnpm --dir /app dsh`）：
 
 1. `pnpm build` 构建插件；
-2. 把插件和 `@deepseek-ai/cordis-plugin-logger-console` 装进独立测试 profile
-   （默认 `trail-test`，与正式 GUI 的 `web` profile 隔离）；
-3. 在 profile 的 `cordis.patch.yml` 里写入组合行
-   （`- id: dsh-trail-plugin / name: '@deepseek-ai/dsh-trail-plugin'`）；
+2. `dsh plugin --profile trail-test add .` 以 **bundle 形态**装进独立测试
+   profile（默认 `trail-test`，与正式 GUI 的 `web` profile 隔离）——包声明
+   `dsh.bundle`，安装后自动进 `dsh.profile.bundles`，组合行由 bundle 层插入，
+   **无需手工写 profile 的 patch**；脚本只补 bundle 层不提供的 storage 栈与
+   console logger（web profile 里这些行来自 web-app bundle）；
+3. `dsh --profile trail-test --dump-config` 断言组合里恰好有一个
+   `id: dsh-trail-plugin` 行（来源为 `# == dsh-trail-plugin` bundle 层）；
 4. 启动 DSH 抓启动日志，断言出现
    `hello world from dsh-trail-plugin (host)`。
 
@@ -98,9 +104,8 @@ DSH_BIN='node /app/apps/cli/lib/bin.js' ./scripts/smoke.sh
 `label` 前缀——说明 `config`（`enabled: true, label: dsh-trail`）被正确注入。
 
 > 要把插件挂进正式 GUI（`web` profile，即本机 3080 端口那个）：
-> 把 `scripts/smoke.sh` 里的 `PROFILE` 换成 `web` 再跑，或手工
-> `dsh plugin --profile web add <本仓库路径>` 并在
-> `$DSH_HOME/profiles/web/cordis.patch.yml` 里加同样的行，然后重启 GUI。
+> `dsh plugin --profile web add <本仓库路径>`（或 `add link:/绝对路径`），
+> 确认 `--dump-config` 出现 bundle 层行，然后重启 GUI。
 > 重启会中断当前会话，开发期建议先用 `trail-test` profile 验证。
 
 ## 骨架遵循的 DSH 约定

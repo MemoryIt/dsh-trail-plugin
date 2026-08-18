@@ -1,0 +1,20 @@
+# dsh-trail-plugin 的 bundle 层：`dsh plugin --profile <name> add <spec>` 安装后，
+# 由 profile 加载器（packages/boot/app-boot 的 loadProfile）自动应用，把下面的行
+# 插进组合树。不再需要手工编辑 profile 的 cordis.patch.yml。
+#
+# patch 语义（@deepseek-ai/cordis-plugin-include 的 applyEntryPatches）：
+# - 顶层是 loader patch 条目数组；`insert`（无 id）把行 append 到组合根；
+# - 行的 `name` 必须是包名（Node 从 profile 目录的 node_modules 解析），
+#   与 package.json#name 保持一致；
+# - 裸写 `- id: …`（不包在 insert 里）是「按 id 覆盖已有行」，在空根上
+#   匹配不到目标，只会 warn + 静默跳过——插件行永远不会挂上。
+#
+# client 半区不单独声明行：包内 `exports["./client"]` + package.json 的
+# `dsh.client` 声明（platform: web）即可被 client-modules 扫描进浏览器 roster。
+
+- insert:
+    - id: dsh-trail-plugin
+      name: 'dsh-trail-plugin'
+      config:
+        enabled: true
+        label: dsh-trail

@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-trail-plugin",
+  "name": "dsh-trail-plugin",
   "version": "0.1.0",
   "description": "Cordis plugin for the DeepSeek Harness (dsh-trail): Session Tree / History Index — a navigable history index over the append-only session log, with jump/view and fork-continue via the official sessions.fork.",
   "keywords": [
@@ -25,6 +25,9 @@
     "./package.json": "./package.json"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "inject": [
@@ -35,7 +38,8 @@
     }
   },
   "files": [
-    "lib"
+    "lib",
+    "cordis.patch.yml"
   ],
   "engines": {
     "node": ">=20"
