@@ -3,8 +3,9 @@
 > 本文件浓缩 2026-08-16（M1–M4 数据链路）+ 2026-08-17（真左栏 feature/left-column）+
 > 2026-08-17（左栏交互 feature/left-column-interactions，已 no-ff 合并回 main）+
 > 2026-08-17（半圆按钮 feature/expand-button-shape，已 no-ff 合并回 main）+
-> 2026-08-17（交接核查：回退破坏性分支 + 补全官方层叠/结构调研）五轮开发对话的
-> 后续开发所需信息。
+> 2026-08-17（交接核查：回退破坏性分支 + 补全官方层叠/结构调研）+
+> 2026-08-18（host 缓存补齐 feature/host-backfill：启动后台顺序冷读补齐缺 history 的旧会话）
+> 五轮开发对话的后续开发所需信息。
 > 代码变更历史见 git log（`b32e2ba` 起，里程碑：skeleton → M1–M4 → 左栏 spike/拖宽/跳转/渲染协调 →
 > 分叉交互 → 行精简 → 分支列表 → 背景统一 → 跳转指示 → header 对齐 → 折叠按钮 → 半圆按钮）。
 > 详细设计见 `DESIGN.md`（Session Tree / History Index 插件）。
@@ -22,7 +23,7 @@
   - **折叠按钮重构**——移除 28px 竖向 rail，折叠态面板 0 宽，☰ 展开按钮作为 Fragment 兄弟悬浮，与 header「«」关于分割线镜像对称（见 §2）。
   - **半圆按钮重构**（feature/expand-button-shape）——折叠按钮 `<-` 配**左半圆**、展开按钮 `->` 配**右半圆**：两半圆**同半径 r=10（20×20）、gap 0 紧贴各自边缘**——折叠态右半圆直径边贴对话区内容左缘（恰好落在官方 header 左 padding 20px 区内，不压标题）、展开态左半圆直径边贴面板右缘（header 右 padding 0）——直径边都对着内容左缘、弧朝外，视觉拼成一个整圆；垂直中心 = titleRow 中心 y=28（translateY(-50%) 精确定心）；hover 高亮勾勒半圆 + title 描述；两按钮互斥出现，共用 `railHovered`（见 §2 决策表）。**GUI 实测通过**（用户确认无问题），已 no-ff 合并回 main（`7daec7d` + merge `544056d`），91 测试全绿。
 - **git/分支状态**：main 领先 `origin/main` **2 个提交（未 push）**。本地分支：`feature/expand-button-shape`（已合并，保留）、`feature/left-column` / `feature/left-column-interactions`（已合并，保留）、`feature/plugin-skeleton`（历史）、**`feature/narrow-auto-collapse` = 破坏性分支**（上次开发破坏了左栏功能后被放弃回退，**勿在其上继续开发**，保留仅作参考）。开发约定：中文 commit + 左栏 scope（`feat/fix/style/docs(left-column): …`）、特性合并回 main 一律 **no-ff**、feature 分支合并不删。
-- **待办**：① **host 侧补齐缺 history 的投影缓存**（25/45 会话缺，见 §3 机制与 §7 方案，需重启 GUI）；② 左栏交互补全剩 **窄屏自动折叠**（阈值触发，拖拽钳制已就位）+ 跳转高亮 polish；③ 旧 tab 去留；④ M5 二级完整路径。
+- **待办**：① **host 侧补齐缺 history 的投影缓存** — ✅ 代码已完成（`src/backfill.ts` 启动后台顺序冷读补齐 + `src/index.ts` 接线，幂等/可中断，见 §2 决策行与 §7 验证配方；**host 改动需重启 GUI 生效**，重启后 missing 数应归零）；② 左栏交互补全剩 **窄屏自动折叠**（阈值触发，拖拽钳制已就位）+ 跳转高亮 polish；③ 旧 tab 去留；④ M5 二级完整路径。
 - **验证约定**：client bundle 的 rev = 文件 sha1 前 12 位；**实测 web 服务器按请求实时计算 manifest**（`pnpm build` 后浏览器刷新即可见，无需重启 GUI——旧记录"重启才进 boot manifest"已过时）。**注意 curl 首查可能命中 index.html 缓存返回旧 rev，加 cache-buster（`?cb=$(date +%s%N)`）再查**。host 侧（src/index.ts）改动仍需重启 GUI 生效。
 - 环境：DSH 源码在 `/app`（只读参考，禁止修改）；`DSH_HOME=/data/dsh-home`；GUI 在 `127.0.0.1:3080`；dsh CLI 用 `node /app/apps/cli/lib/bin.js`。
 
@@ -38,6 +39,7 @@
 | **行内跳转走官方 DOM 锚点（左栏后续迭代）** | 聊天行自带 `data-chat-anchor-key`（= 会话快照节点 key），滚动容器 `[data-conversation-scroll]`；历史节点 → 聊天节点映射用 `ctx.sessions.binding(id).session`（ObservableSnapshot\<ConversationSnapshot\>）按 turn/anchorSeq 对齐 |
 | **左栏几何必须实时查询节点（渲染协调）** | `conversation` 槽位是 session-maybe：会话切换时内容按 `epoch` 重挂载（DOM 节点被替换）。若 layout effect 闭包缓存 convRoot/panel 引用 → 切换后指向 detached 节点 → RO 永不触发、`getBoundingClientRect` 全 0 → 面板钉死 (0,0)/0 高（表现：切走切回左栏消失、关侧栏竖条不回位）。**必须**：effect deps 含 current（切换即重跑）、每次 applyLayout/漂移轮询实时 `closest/querySelector`、cleanup 实时清理 |
 | **历史投影对"注册前已沉睡"的旧会话缺失** | history 投影 2026-08-16 注册；此前存在且之后从未打开的会话，checkpoint 从未写 history 缓存行 → 列表行投影无 history（实测 45 会话仅 20 有）。会话**打开**会走 coldSnapshot（缓存行+尾部重放）补齐并写回。列表行投影来源：live 会话 = `sessionProjections.snapshot(session)`（实时），cold 会话 = `sessionProjectionCache.cachedSnapshot(meta)`（只读缓存行） |
+| **启动后台补齐缺失 history 缓存（顺序、幂等、自愈）** | 官方冷读阶梯即补齐路径：`cachedSnapshot(meta)` 判定（`values.history` 缺失 = 无可用行/version 不匹配/缓存读抛错，一律按缺失），`coldSnapshot(id, signal)` 补齐（缓存行+尾部重放→重折叠→**fail-soft 写回**）——与「会话打开时自动补齐」同一机制，只是批量提前到启动时。顺序执行（27 会话毫秒级）、每会话错误隔离、`ctx.effect` + AbortSignal（插件停止/更新即中断循环，abort 导致的失败不计 skipped）。只处理当前缺失：空 log 会话补齐 init 空态行后 cachedSnapshot 有值、不再重复。不加 config 开关（幂等、开销可忽略、自愈未来任何新缺失）。`src/backfill.ts` 纯编排（最小本地接口，不 import dsh 包），`src/index.ts` 在投影注册后接线，服务缺席（headless）静默跳过 |
 | **client 半区用 esbuild 打自定义 loader bundle** | DSH 静态插件 client 包必须产出 `window.__ModuleLoader__.load({id, factory(require)})`；esbuild 内联所有源码模块，external 只留平台模块（react、@deepseek-ai/cordis、**@deepseek-ai/dsh-client-ui-primitives** 等）由浏览器模块表解析（清单见 `/app/packages/client/web/src/platform.ts` 的 PLATFORM_MODULES）。**zod 只在 host 侧**（`src/history/schema.ts`），client 严禁 import（会打进 bundle）。**官方模块复用走 `require('@deepseek-ai/dsh-client-ui-primitives')` + 本地最小类型**（本地 node_modules 无此包，import 语句会让 tsc 解析失败） |
 | **分叉展开结构 = 行下方 column 兄弟（对齐官方 DisclosureRow）** | 展开体若作行内 flex item 会被横向挤压、撑高整行（曾现 bug：标题被挤占、胶囊被挤到中间）。官方 DisclosureRow 骨架：root column = [行, 展开体]，展开体是行下方兄弟、不参与行内 flex、行高恒定。**不复用 DisclosureRow 组件本体**：① 行点击模型冲突（官方整行点击=展开，我们=跳转，且其无行点击自定义入口）；② 官方 `.row` 固定 24px 行高（CSS module 无覆盖入口），放不下我们的摘要+meta 两行。**复用官方 chevron 元素**（`IconChevronDownOutline14`，模块表 external），hover/展开时行首数字变 chevron（v 型提示），交互语义与官方 tool 行一致 |
 | **主表面一律 `bg-base`（官方惯例）** | 官方大面积表面全部 bg-base：会话区 ConversationRoot / DetailsPanel / AppFrame / QueueDock / ReasoningRow / GenericCommandCard；`bg-layer-1/2` 只用于 trajectory 表格树 / JsonTree / settings 卡片等深嵌套表面（Modal/HoverCard 用专用 token + 阴影）。左栏 panel 与 tab 面板 bg-layer-1 → bg-base；展开体同底靠边框/缩进区分层级（官方 ioCard 模式），再简化为纯缩进（去线框） |
@@ -125,10 +127,9 @@ curl -s -X POST http://127.0.0.1:3080/api/session.list -H 'Content-Type: applica
 
 ## 7. 下一步（按数据就绪度）
 
-0. **host 侧补齐缺 history 的投影缓存**（首个待办，涉及旧会话左栏空）：history 投影注册前已存在、之后未再打开的会话，持久化缓存行无 history → 列表行投影空 → 切到它们左栏空态。机制上会话**打开**会自动走 coldSnapshot 补齐并写回，但为了一次性解决：
-   - 在 `src/index.ts` apply 里后台（不阻塞启动）遍历 `ctx.sessionPersistence.list()` 的 meta；对 `ctx.sessionProjectionCache.cachedSnapshot(meta)` 缺 `history` 的会话调 `coldSnapshot(meta.id)` 补齐（写回缓存）；
-   - 用 ctx.effect 管理 + AbortSignal 支持；只对缺失的会话补（20/45 已有）；
-   - **host 改动需重启 GUI 生效**（会中断会话，选时机重启）；改完验证：切到任一旧会话左栏都有节点。
+0. **host 侧补齐缺 history 的投影缓存** — ✅ **已实现**（2026-08-18，`feature/host-backfill`）：
+   - 实现：`src/backfill.ts` `backfillMissingHistory`（`persistence.list()` → `cachedSnapshot(meta).values.history` 缺失判定 → 逐个顺序 `coldSnapshot(id, signal)`；错误隔离/abort 中断/幂等），`src/index.ts` 投影注册后 `ctx.effect` 接线（AbortController cleanup，服务缺席跳过）；`tests/backfill.test.ts`（9 用例）+ `tests/host-projection.test.ts` 接线用例（2 个）；102 测试全绿。
+   - **验证（需重启 GUI 生效，会中断当前会话）**：重启后跑「验证配方」的 session.list 探测，统计 `items[].projections.values.history` 缺失数——重启前实测 27/58 缺失，重启后应归零（空 log 会话补齐 init 空态行也计入有值）；GUI 切到任一旧会话左栏应有节点。启动日志可见 `history backfill: 检查 N 个会话，补齐 M 个，跳过 K 个`。
 1. **左栏交互补全**（骨架/拖宽/跳转已完成；fork 续写 ✅、谱系角标/下拉 ✅）：
    a. ~~点击节点行内跳转~~（完成：`src/jump.ts` 纯映射 + 左栏行 onClick；落点=轮首用户行；**超出已加载窗口自动 `session.loadOlder()` 逐页翻页**（每页 50 条，上限 20 页；hasMore/openState/窗口起点三重守卫防空转）；翻页后轮询等行渲染进 DOM（4s 超时）；失败提示：聊天视图未激活 / 目标节点未加载或不存在）。
    b. ~~fork 续写入口迁移到左栏行~~（完成：行尾「续写」按钮 hover 显现（opacity/pointerEvents 随行 hover 态），点击 `sessions.fork({sessionId: current, atSeq: boundarySeq, increaseTitle: true})` → `open(childId)`，失败走 showHint 瞬态提示；进行中节点不渲染按钮）。
