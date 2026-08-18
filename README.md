@@ -3,6 +3,8 @@
 DeepSeek Harness（DSH）插件：**Session Tree / History Index**——给线性会话日志加上
 可索引、可跳转、可分叉的导航层。
 
+<img width="1436" height="773" alt="image" src="https://github.com/user-attachments/assets/df24af83-7aab-42d3-8cf1-a70c94ff6a1c" />
+
 npm 包名：`dsh-trail-plugin`（MIT）。
 
 ## 这是什么
