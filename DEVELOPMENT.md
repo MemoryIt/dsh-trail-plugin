@@ -7,7 +7,8 @@
 > 2026-08-18（host 缓存补齐 feature/host-backfill：启动后台顺序冷读补齐缺 history 的旧会话）+
 > 2026-08-18（移除历史索引 tab feature/remove-history-tab：conversation.view 注册删除，保留 shell.overlay 左栏）+
 > 2026-08-18（交接同步：两轮功能 GUI 实测通过 + git 分支状态刷新 + 本轮新验证的官方机制补充）+
-> 2026-08-18（安装方式 bundle 化 feature/plugin-add-bundle：`dsh plugin add` 可装 + web profile 迁移重启）
+> 2026-08-18（安装方式 bundle 化 feature/plugin-add-bundle：`dsh plugin add` 可装 + web profile 迁移重启）+
+> 2026-08-18（README 改用户向 feature/user-readme：开发内容迁入 §8，README 只留安装/使用/配置/FAQ）+
 > 八轮开发对话的后续开发所需信息。
 > 代码变更历史见 git log（`b32e2ba` 起，里程碑：skeleton → M1–M4 → 左栏 spike/拖宽/跳转/渲染协调 →
 > 分叉交互 → 行精简 → 分支列表 → 背景统一 → 跳转指示 → header 对齐 → 折叠按钮 → 半圆按钮 →
@@ -195,4 +196,133 @@ pnpm --dir /app dsh --profile trail-test --dump-config | grep -A4 "id: dsh-trail
    e. 已知边界：非聊天视图（trajectory）无法编程切换（chatStore 私有）→ 提示用户手动切回（VIEW_INACTIVE 文案）；hidden-only turn 无 DOM 行 → 邻近可见回退；compacted turn 内容已被官方删除 → NOT_FOUND 文案带「可能已压缩」提示（真实出现再补 host fold 的 compaction 折叠：`compaction/summary` 的 `shadowedRange`/`summary` → compacted 节点，需 stateVersion 2→3）；超深历史（>5000 条/100 页）→ TIMEOUT 提示可重试；跳转高亮留待 polish。
 2. **旧 tab 去留** — ✅ **已移除并 GUI 实测通过**（2026-08-18，`feature/remove-history-tab`）：删除 `src/client.ts` 的 `conversation.view` 注册块 + `createHistoryView` 整块（含其局部样式、`VIEW_ID`/`HistoryViewProps`/`KIND_ICONS`）；保留左栏共享的 `toLineageSessions`、`SessionSummaryLike`/`SessionListStateLike`、`ClientSessions`/`ClientSlots`、`history/*`/`jump`/`left-column` 纯逻辑与 `shell.overlay` 注册；`tests/client.test.ts` 删 4 个 tab 用例、改写 apply 注册断言（只剩 shell.overlay）；98 测试全绿。**GUI 实测通过（用户确认无问题）**：会话 header tab 环只剩「对话/Trajectory」两项，左栏全部功能（跳转/续写/角标/拖宽/折叠）正常。**client 改动刷新即生效，无需重启 GUI**（官方 view 环剩 chat/trajectory 两项，tabs 行照常，左栏 75px header 对齐不受影响）。
 3. **M5 二级完整路径**：数据已全在 client（每会话完整节点路径），基本是 UI。
-4. **bundle 发布形态**（2026-08-18 bundle 化已完成，npm 包名已定 `dsh-trail-plugin` 且 npm 上可用；2026-08-18 发布准备完成）：npm 发布需 publish 前构建好 `lib/`（`files` 已含 `lib` + `cordis.patch.yml`）——已加 `prepublishOnly: pnpm verify`（发布前自动 typecheck+测试+build）与 `prepare: pnpm build`（git 安装用）；`exports` 移除了未随包发布的 `./src/*`；补了 `LICENSE`（MIT）；`pnpm pack` 产物 `dsh-trail-plugin-0.1.0.tgz` 已实测：装进独立 `npmtest` profile（`dsh plugin add <tarball>`）→ dump-config 恰一行 bundle 行 → boot 出 hello 日志，全绿。git 安装（`dsh plugin --profile <name> add github:<owner>/<repo>`）需包内 `prepare: pnpm build` + 用户侧在 profile 的 `pnpm-workspace.yaml` 加 `allowBuilds`（pnpm ≥10 默认拦截 git 依赖构建脚本，报错会给出具体键）；tarball（`pnpm pack`）路径无需任何放行。
+4. **bundle 发布形态**（2026-08-18 bundle 化已完成，npm 包名已定 `dsh-trail-plugin` 且 npm 上可用；2026-08-18 发布准备完成）：npm 发布需 publish 前构建好 `lib/`（`files` 已含 `lib` + `cordis.patch.yml`）——已加 `prepublishOnly: pnpm verify`（发布前自动 typecheck+测试+build）与 `prepare: pnpm build`（git 安装用）；`exports` 移除了未随包发布的 `./src/*`；补了 `LICENSE`（MIT）；`pnpm pack` 产物 `dsh-trail-plugin-0.1.0.tgz` 已实测：装进独立 `npmtest` profile（`dsh plugin add <tarball>`）→ dump-config 恰一行 bundle 行 → boot 出 hello 日志，全绿。git 安装（`dsh plugin --profile <name> add github:<owner>/<repo>`）需包内 `prepare: pnpm build` + 用户侧在 profile 的 `pnpm-workspace.yaml` 加 `allowBuilds`（pnpm ≥10 默认拦截 git 依赖构建脚本，报错会给出具体键）；tarball（`pnpm pack`）路径无需任何放行。**发布已执行**：`dsh-trail-plugin@0.1.0` 已上线 npm（2026-08-18，registry 读侧 CDN 有 ~3 分钟延迟属正常）；完整发版流程见 §8.5。
+
+## 8. 从 README 迁入的开发内容（2026-08-18：README 改为用户向上手指南）
+
+> README.md 自本轮起只面向**用户**（安装/使用/配置/FAQ），以下开发向内容全部迁至此。
+> 原 README「数据链路（M1）」与「下一步」两节不重复迁入：前者架构细节在
+> DESIGN.md、摘要留在 README「工作原理」；后者已被本文件 §7 取代。
+
+### 8.1 常用命令
+
+```bash
+pnpm install     # 安装依赖
+pnpm typecheck   # 类型检查
+pnpm test        # 跑单测
+pnpm build       # tsc 构建 + esbuild 打 client bundle（lib/client.js）
+pnpm verify      # 类型检查 + 测试 + 构建 一条龙
+pnpm pack        # 打 npm tarball（含 prepare 自动 build）
+```
+
+### 8.2 完整目录结构
+
+```text
+.
+├── cordis.patch.yml      # bundle 层：dsh plugin add 安装后自动插入的组合行
+├── package.json          # 包声明：name、exports["./client"]、dsh.bundle + dsh.client（platform: web）
+├── tsconfig.json         # strict + NodeNext ESM
+├── vitest.config.ts
+├── scripts/
+│   ├── build-client.mjs  # esbuild 打包 client → 浏览器模块加载器 handoff
+│   └── smoke.sh          # 挂载验证（独立 trail-test profile 启动 DSH）
+├── src/
+│   ├── index.ts          # Host 插件入口：注册 history 投影单元
+│   ├── client.ts         # Client 插件入口（./client 子路径，factory(require)）
+│   ├── history/
+│   │   ├── types.ts      # 节点树共享类型（host 折叠 + client 渲染）
+│   │   ├── text.ts       # 摘要/文本提取工具（纯函数）
+│   │   ├── fold.ts       # 事件折叠：SessionEvent → 节点树（纯 reducer）
+│   │   └── schema.ts     # zod schema（host 侧，校验 view 输出）
+│   ├── options.ts        # 配置：类型 + schemastery Schema + normalizeOptions
+│   └── lib.ts            # 纯业务逻辑占位
+└── tests/
+    ├── history-fold.test.ts    # 事件折叠单测（turn 分组/摘要/fork 边界）
+    ├── host-projection.test.ts # host 投影单元注册与折叠
+    ├── client.test.ts          # client bundle factory + 视图渲染
+    ├── options.test.ts
+    ├── lib.test.ts
+    └── plugin-shape.test.ts    # 插件形状 + bundle 安装形态（patch/声明）校验
+```
+
+### 8.3 骨架遵循的 DSH 约定
+
+| 项 | 约定 | 依据 |
+| --- | --- | --- |
+| 包形态 | ESM，`main: lib/index.js`，`exports` 带 `./client` 子路径 | DSH 各包（如 `@deepseek-ai/dsh-client-modules`） |
+| 插件形状 | 具名导出 `name` / `Config` / `apply(ctx, config)` | 如 `@deepseek-ai/dsh-hooks-claude-code` |
+| 配置校验 | schemastery `z.object({...})`，`z<Options>` 标注 | 同上 |
+| Client 声明 | package.json `dsh.client: { platform: "web", ... }` | `packages/client/modules` 扫描逻辑 |
+| 日志 | `ctx.logger('name')`，核心服务无需 inject | cordis 4 核心混入 |
+| 副作用 | `ctx.effect(() => () => {})` 保证停止/更新时清理 | cordis 4 Fiber |
+
+### 8.4 挂载验证（smoke test）
+
+单测只能证明代码正确，**证明「DSH 启动时真的加载到了本插件」**要靠真实启动：
+
+```bash
+./scripts/smoke.sh
+```
+
+脚本做五件事（`DSH_BIN` / `DSH_HOME` / `PROFILE` 均可通过环境变量覆盖；
+容器内 dsh 必须以源码方式运行，默认 `pnpm --dir /app dsh`）：
+
+1. `pnpm build` 构建插件；
+2. `dsh plugin --profile trail-test add .` 以 **bundle 形态**装进独立测试
+   profile（默认 `trail-test`，与正式 GUI 的 `web` profile 隔离）——包声明
+   `dsh.bundle`，安装后自动进 `dsh.profile.bundles`，组合行由 bundle 层插入，
+   **无需手工写 profile 的 patch**；脚本只补 bundle 层不提供的 storage 栈与
+   console logger（web profile 里这些行来自 web-app bundle）；
+3. `dsh --profile trail-test --dump-config` 断言组合里恰好有一个
+   `id: dsh-trail-plugin` 行（来源为 `# == dsh-trail-plugin` bundle 层）；
+4. 启动 DSH 抓启动日志，断言出现
+   `hello world from dsh-trail-plugin (host)`。
+
+启动日志形如：
+
+```text
+[I] dsh-trail [dsh-trail] hello world from dsh-trail-plugin (host)
+```
+
+`ctx.logger('dsh-trail')` 的命名空间是日志第一段，`[dsh-trail]` 是配置里的
+`label` 前缀——说明 `config`（`enabled: true, label: dsh-trail`）被正确注入。
+
+> 要把插件挂进正式 GUI（`web` profile，即本机 3080 端口那个）：
+> `dsh plugin --profile web add <本仓库路径>`（或 `add link:/绝对路径`），
+> 确认 `--dump-config` 出现 bundle 层行，然后重启 GUI。
+> 重启会中断当前会话，开发期建议先用 `trail-test` profile 验证。
+
+### 8.5 发布到 npm
+
+包形态：`main`/`exports["./client"]`/`types` 指向 `lib/`，`files` 只含
+`lib` + `cordis.patch.yml` + LICENSE，`dsh.bundle` 声明让 `dsh plugin add` 安装
+后自动进 bundles 层。`prepublishOnly` 会在发布前自动跑 `pnpm verify`，保证
+`lib/`（gitignored）始终是新的；`prepare`（`pnpm build`）供 git 安装场景使用。
+
+```bash
+# 一次性：登录 npm（需要有 npm 账号）
+npm login            # 或 pnpm login
+
+# 每次发版：
+pnpm version patch   # 或 minor / major；也可手改 package.json
+pnpm publish         # 先自动 pnpm verify（typecheck + 测试 + build），再打包上传
+git push --tags
+```
+
+发布前可先用 `pnpm pack` 生成 `dsh-trail-plugin-<version>.tgz` 检查包内容
+（`npm pack --dry-run` 只列出不生成）。包名 `dsh-trail-plugin` 已在 npm 确认可用。
+
+已发布版本：**0.1.0**（2026-08-18，`memoryit` 账号）。registry 读侧 CDN 有
+`max-age=300` 的缓存延迟（发布后 `npm view` 可能短暂 404，重试 publish 报
+`cannot publish over the previously published versions` 即证明已落库）。
+
+用户侧安装（与本地路径安装同一机制，只是从 registry 取预构建产物）：
+
+```bash
+dsh plugin --profile <name> add dsh-trail-plugin        # 从 npm
+dsh plugin --profile <name> add ./dsh-trail-plugin-0.1.0.tgz   # 从 tarball（无网络场景）
+```
+
+> git 安装（`add github:<owner>/<repo>`）会拿到源码而不是构建产物，需要包内
+> `prepare` 脚本（已有：`pnpm build`）且用户侧在 profile 的
+> `pnpm-workspace.yaml` 放行 `allowBuilds`——优先走 npm/tarball 分发预构建产物。
